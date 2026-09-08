@@ -4,8 +4,8 @@
 
 Market variance does not accumulate evenly across the days of a week. This measures the shape of
 that accumulation in NSE index options — the **variance clock** — across two SEBI rule changes that
-moved expiry days by regulation rather than by market choice, and then prices what a delta hedger
-loses by assuming variance accrues uniformly in calendar time.
+moved expiry days by regulation rather than by market choice, and then prices what it costs to
+ignore it.
 
 The regulator, not the researcher, assigned the treatment. That is the point.
 
@@ -13,58 +13,74 @@ The regulator, not the researcher, assigned the treatment. That is the point.
   ceased to exist.
 - **Sep 2025** — expiry days separated. NSE moved Thursday → Tuesday.
 
-## Status
+## The result
 
-Data, implied-vol surface and first clock estimates are built. The simulation engine is not.
+**Expiry sessions carry significantly less variance, and the low-variance weekday moved with the
+rule.** Weekday weights from the option surface, normalised to average one, 300 bootstrap draws:
+
+| Regime | Expiry weekday | Weight | 95% CI |
+|---|---|---|---|
+| Thursday, to 2025-08-28 | Thu | **0.654** | [0.432, 0.843] |
+| Tuesday, from 2025-09-02 | Tue | **0.607** | [0.298, 0.844] |
+
+Effect sizes match, both exclude 1, and the low weekday jumped Thursday → Tuesday exactly when the
+rule did. Replicated independently on ~128,000 single-stock-future days: variance on index-expiry
+sessions runs at 0.805 [0.774, 0.839] of an ordinary session pre-regime.
+
+**Two obvious explanations are ruled out.** Settlement averaging is not it — stock-days where the
+stock future itself settles to a VWAP are no more suppressed (0.824) than days where it settles
+normally (0.849). Max-pain pinning is not it either — spot *diverges* from the max-pain strike at
+roughly the random-walk rate. What is left is an unexplained market-wide effect on index expiry
+sessions.
+
+**What it is worth.** Not what the plan assumed. Delta-hedging a weekly straddle on the wrong clock
+moves the P&L standard deviation by 2.3% of its own size — discrete rebalancing swamps it. The
+money is in the entry price at one session to expiry:
+
+| Opened | Sessions to expiry | Price error for a calendar-time trader |
+|---|---|---|
+| Mon | 1 | **-21.8%** |
+| Fri | 2 | +2.0% |
+| Wed | 4 | -1.3% |
+| Tue | 5 | 0.0% |
+
+Over a full week the weekday mix averages out and the error vanishes. **The clock is a
+one-day-to-expiry story, and it shows up in the price rather than the hedge.**
+
+Not yet done: randomization inference (D-11). The effect is significant against its own sample; it
+has not been tested against pseudo-event dates, so **"the rule caused it" is unsupported**. v1 is
+NSE-only, which leaves the Sep-2025 event with no control unit — an interrupted time series, not a
+difference-in-differences.
+
+## Status
 
 | Stage | State |
 |---|---|
 | Ingest, panel, regime scan | done |
 | Forwards, IV surface, ATM variance | done |
-| Clock estimator (options + returns channel) | first estimates, no confidence intervals yet |
-| Randomization inference (D-11) | not run |
-| Heston / time-changed GBM engine | not built |
-| Hedging experiment | not built |
+| Clock estimator, bootstrap CIs | done |
+| Expiry-effect mechanism tests | done |
+| Randomization inference (D-11) | **not run** |
+| Heston robustness layer | not built |
 
 Four of eight acceptance gates pass. See [DECISIONS.md](DECISIONS.md) D-18.
-
-## The finding so far
-
-**The premise was wrong, and the data says so twice.**
-
-The project assumed variance accumulates *faster* on expiry days. It accumulates slower — in the
-option-implied channel and in the realized-returns channel, which share no data:
-
-| Regime | Lowest-weight weekday | Expiry vs non-expiry realized variance |
-|---|---|---|
-| Thursday (to 2025-08-28) | **Thu, 0.40** | 0.73 |
-| Tuesday (from 2025-09-02) | **Tue, 0.42** | 0.86 |
-
-In each regime the lowest-variance weekday *is* the expiry weekday, and it moved Thursday → Tuesday
-exactly when the rule moved. The natural experiment fired. The sign is backwards from the
-hypothesis.
-
-Most likely a settlement-convention effect: an option's variance runs to its settlement price, and
-NSE settles on a time-average of the final window rather than a point. The variance of an average
-of a Brownian path is about a third of its endpoint variance. If that is the mechanism it is real,
-and a hedger faces it.
-
-**This is not yet a result.** No confidence intervals, no permutation test. See D-08b.
 
 ## Run it
 
 ```bash
 uv sync
-uv run python -m src.ingest.download      # ~800 MB of NSE archives, idempotent
-uv run python -m src.ingest.regime_scan   # derive the regime timeline
-uv run python -m src.ingest.build_panel   # raw -> parquet panel
-uv run python -m src.iv.forward           # put-call parity forwards
-uv run python -m src.iv.invert            # Black-76 implied vol surface
-uv run python -m src.iv.smile             # vega-weighted ATM total variance
-uv run python -m src.clock.estimate       # the clock
+uv run python -m src.ingest.download          # ~800 MB of NSE archives, idempotent
+uv run python -m src.ingest.regime_scan       # derive the regime timeline
+uv run python -m src.ingest.build_panel       # raw -> parquet panels
+uv run python -m src.iv.forward               # put-call parity forwards
+uv run python -m src.iv.invert                # Black-76 implied vol surface
+uv run python -m src.iv.smile                 # vega-weighted ATM total variance
+uv run python -m src.clock.estimate           # the clock
+uv run python -m src.analysis.expiry_effect   # mechanism tests
+uv run python -m src.experiment.mispricing    # what the clock is worth
 
-uv run pytest -q                          # all tests
-uv run pytest -m acceptance               # the gates only
+uv run pytest -q                              # all tests
+uv run pytest -m acceptance                   # the gates only
 ```
 
 No credentials. All data is public NSE archives. Everything under `data/` and `results/` is
@@ -73,33 +89,33 @@ regenerated by the commands above and is not committed.
 ## Layout
 
 ```
-src/ingest/    download, regime scan, panel build
-src/iv/        forward, Black-76 inversion, smile fit
-src/clock/     weight estimation
-src/sim/       simulation engine (not built)
-src/experiment/hedging experiment (not built)
-tests/         one test per acceptance gate
-DECISIONS.md   every modelling choice and why
+src/ingest/     download, regime scan, panel build
+src/iv/         forward, Black-76 inversion, smile fit
+src/clock/      weight estimation
+src/analysis/   expiry-effect mechanism tests
+src/sim/        time-changed GBM paths and hedging
+src/experiment/ mispricing and hedging experiments
+tests/          one test per acceptance gate
+DECISIONS.md    every modelling choice and why
 ```
 
 ## Things that will bite you
-
-Written up properly in DECISIONS.md; the short version:
 
 - **On expiry day, the settlement column holds the underlying's final settlement, not an option
   price.** All 146 expiring NIFTY rows on one sample date share a single value. Never invert it.
 - **Settlement price is not a traded price.** For untraded strikes it is an exchange model output —
   663 of 663 disagreed with the close. Even 80 of 559 *traded* rows disagreed.
 - **Weeklies have no matching future.** NSE lists three monthly futures against ~18 option
-  expiries. The forward comes from the put-call parity median across strikes — the *median*,
-  because bad settlements violate no-arbitrage outright and the mean swallows them.
+  expiries. The forward comes from the put-call parity *median* across strikes, because bad
+  settlements violate no-arbitrage outright and the mean swallows them.
+- **The Nifty returns channel has no power.** 87 pre-regime expiry sessions with fat tails; the
+  bootstrap ratio spans [0.45, 1.14]. Use the stock-futures cross-section instead. An earlier
+  version of this README claimed the returns channel confirmed the options channel. It does not.
 - **NSE archives need a browser `User-Agent` and a `Referer` header**, or you get a block page.
-- **v1 is NSE-only, so Sep-2025 has no control unit.** The result is an interrupted time series,
-  not a difference-in-differences. It is not causal and must not be labelled that way.
 
 ## Known gaps
 
-- RBI MPC announcement dates are not populated. They are not derivable from NSE archives and are
-  not safe to assert from memory, so the macro-event dummy currently covers Union Budget days only.
+- RBI MPC announcement dates are not populated — not derivable from NSE archives, not safe to
+  assert from memory. The macro-event dummy covers Union Budget days only.
 - The regime scan pools weekly, monthly and long-dated expiries, which share no expiry schedule.
   `build_panel` splits them by tenor; the scan does not.

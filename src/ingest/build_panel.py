@@ -186,6 +186,41 @@ def build_index_panel(cfg: Settings = settings) -> int:
     return panel.height
 
 
+def build_stock_futures_panel(cfg: Settings = settings) -> int:
+    """Single-stock futures settlement prices.
+
+    The index returns channel has 87 pre-regime expiry sessions and very fat tails, which is not
+    enough to estimate a mean squared return -- the bootstrap interval on the expiry-day ratio
+    spans 0.45 to 1.14. These ~280 stocks trade on the same sessions and give roughly 128,000
+    stock-days, which is where a test of the expiry-day effect has power.
+    """
+    cols = ["FinInstrmTp", "TckrSymb", "FininstrmActlXpryDt", "SttlmPric", "TtlTradgVol", "OpnIntrst"]
+    frames = []
+    for day in _trading_days(cfg):
+        path = cfg.raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv.zip"
+        with zipfile.ZipFile(path) as z:
+            raw = z.read(z.namelist()[0])
+        df = pl.read_csv(
+            io.BytesIO(raw), columns=cols, schema_overrides={c: pl.Utf8 for c in cols}
+        ).filter(pl.col("FinInstrmTp") == "STF")
+        if df.is_empty():
+            continue
+        frames.append(
+            df.select(
+                pl.lit(day).cast(pl.Date).alias("trade_date"),
+                pl.col("TckrSymb").alias("sym"),
+                pl.col("FininstrmActlXpryDt").str.slice(0, 10).str.to_date().alias("expiry"),
+                pl.col("SttlmPric").cast(pl.Float64).alias("settle"),
+                pl.col("TtlTradgVol").cast(pl.Float64).alias("vol"),
+                pl.col("OpnIntrst").cast(pl.Float64).alias("oi"),
+            )
+        )
+    panel = pl.concat(frames, how="vertical_relaxed")
+    cfg.panel_dir.mkdir(parents=True, exist_ok=True)
+    panel.write_parquet(cfg.panel_dir / "stock_futures.parquet")
+    return panel.height
+
+
 def main(cfg: Settings = settings) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     n_index = build_index_panel(cfg)
@@ -194,6 +229,7 @@ def main(cfg: Settings = settings) -> None:
     for year, n in written.items():
         log.info("fo_%d.parquet: %d rows", year, n)
     log.info("total contract-days: %d", sum(written.values()))
+    log.info("stock_futures.parquet: %d rows", build_stock_futures_panel(cfg))
 
 
 if __name__ == "__main__":

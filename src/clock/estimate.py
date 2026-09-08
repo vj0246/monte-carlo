@@ -54,7 +54,9 @@ class ClockFit:
     boot: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
-def _day_features(cfg: Settings, symbol: str) -> tuple[list[dt.date], np.ndarray]:
+def _day_features(
+    cfg: Settings, symbol: str, param_names: tuple[str, ...] = PARAM_NAMES
+) -> tuple[list[dt.date], np.ndarray]:
     """Design matrix over every session in the sample, one row per session."""
     cal = json.loads((cfg.raw_dir / "calendar.json").read_text(encoding="utf-8"))
     sessions = [dt.date.fromisoformat(d) for d in cal["trading_days"]]
@@ -68,19 +70,24 @@ def _day_features(cfg: Settings, symbol: str) -> tuple[list[dt.date], np.ndarray
     macro = json.loads((cfg.reference_dir / "macro_events.json").read_text(encoding="utf-8"))
     event_days = {dt.date.fromisoformat(d) for d in macro["union_budget"] + macro["rbi_mpc"]}
 
-    design = np.zeros((len(sessions), len(PARAM_NAMES)))
+    design = np.zeros((len(sessions), len(param_names)))
+
+    def mark(row: int, name: str) -> None:
+        if name in param_names:
+            design[row, param_names.index(name)] = 1.0
+
     for i, day in enumerate(sessions):
         wd = day.weekday()
         if wd >= 5:
             # D-02c: a weekend session cannot carry a weekday weight (four Saturdays and one
             # Sunday in the whole sample), but it must stay in the day sequence.
-            design[i, PARAM_NAMES.index("weekend")] = 1.0
+            mark(i, "weekend")
         elif wd > 0:  # Monday is the pinned reference
-            design[i, PARAM_NAMES.index(WEEKDAYS[wd])] = 1.0
+            mark(i, WEEKDAYS[wd])
         if day in expiry_days:
-            design[i, PARAM_NAMES.index("expiry_day")] = 1.0
+            mark(i, "expiry_day")
         if day in event_days:
-            design[i, PARAM_NAMES.index("macro_event")] = 1.0
+            mark(i, "macro_event")
     return sessions, design
 
 
@@ -126,6 +133,29 @@ def _demean(values: np.ndarray, groups: np.ndarray, n_groups: int) -> np.ndarray
     return values - (sums / np.maximum(counts, 1))[groups]
 
 
+def _normalise(
+    theta: np.ndarray, names: tuple[str, ...], design: np.ndarray, touched: np.ndarray
+) -> dict[str, float]:
+    """Weekday levels rescaled so the fitted weights average one over the window (D-01).
+
+    Reporting raw ``exp(theta)`` would leave every number relative to the pinned Monday, which is
+    misleading here: a Monday session carries the whole weekend's information, so Monday is
+    genuinely a high-variance session. Against a Monday baseline every other weekday looks
+    suppressed, and "the expiry weekday is low" becomes partly a restatement of the weekend effect.
+    Mean-one normalisation separates the two.
+
+    Weekday entries are levels. ``expiry_day``, ``weekend`` and ``macro_event`` stay as
+    multipliers applied on top of a weekday, so they are not rescaled.
+    """
+    scale = float(np.exp(design[touched] @ theta).mean())
+    lookup = {name: theta[k] for k, name in enumerate(names)}
+    out = {wd: float(np.exp(lookup.get(wd, 0.0)) / scale) for wd in WEEKDAYS}
+    for name in ("weekend", "expiry_day", "macro_event"):
+        if name in lookup:
+            out[name] = float(np.exp(lookup[name]))
+    return out
+
+
 def fit(
     cfg: Settings = settings,
     symbol: str = "NIFTY",
@@ -133,8 +163,18 @@ def fit(
     window: tuple[dt.date, dt.date] | None = None,
     n_boot: int = 0,
     seed: int = 0,
+    dummies: tuple[str, ...] = ("weekend", "expiry_day", "macro_event"),
 ) -> ClockFit:
-    sessions, full_design = _day_features(cfg, symbol)
+    """Fit the clock. ``dummies`` selects which non-weekday effects are estimated.
+
+    Within a single regime the expiry day is nearly a deterministic function of weekday -- 83 of 87
+    pre-Sep-2025 expiries fall on a Thursday -- so ``expiry_day`` and ``a[Thu]`` are not separately
+    identified and the split between them is arbitrary. Pass ``dummies=("weekend",)`` for a
+    within-regime fit and let the expiry weekday's own weight carry the effect. The expiry dummy is
+    identifiable only across regimes, where the rule change supplies the variation (D-08b).
+    """
+    param_names = tuple(n for n in PARAM_NAMES if n in WEEKDAYS or n in dummies)
+    sessions, full_design = _day_features(cfg, symbol, param_names)
     y, window_matrix, groups = _observations(cfg, symbol, sessions, variance_col, window)
     n_groups = int(groups.max()) + 1 if len(groups) else 0
     if len(y) < 50:
@@ -155,9 +195,9 @@ def fit(
         gram = np.linalg.pinv(active[:, kept].T @ active[:, kept])
         worst = int(np.argmax(np.diag(gram)))
         kept.pop(worst)
-    dropped = [PARAM_NAMES[k] for k in range(full_design.shape[1]) if k not in kept]
+    dropped = [param_names[k] for k in range(full_design.shape[1]) if k not in kept]
     design = full_design[:, kept]
-    names = tuple(PARAM_NAMES[k] for k in kept)
+    names = tuple(param_names[k] for k in kept)
 
     def residual(theta: np.ndarray) -> np.ndarray:
         weights = np.exp(design @ theta)
@@ -183,7 +223,7 @@ def fit(
     # VIF: how much collinearity inflates each parameter's variance relative to an orthogonal design.
     vif = {name: float(gram_inv[k, k] * (jac[:, k] @ jac[:, k])) for k, name in enumerate(names)}
 
-    weights = {name: float(np.exp(theta[k])) for k, name in enumerate(names)}
+    weights = _normalise(theta, names, design, touched)
     # The weekday and expiry-day columns are near-collinear by construction: pre-Sep-2025 every
     # Thursday but four was an expiry. Splitting the effect between them is arbitrary; the product
     # is the economically meaningful number and is what gets reported.
@@ -220,11 +260,12 @@ def fit(
             except Exception:  # noqa: BLE001 - a failed draw is dropped, not silently zeroed
                 continue
         if draws:
-            arr = np.exp(np.vstack(draws))
-            for k, name in enumerate(names):
+            normed = [_normalise(th, names, design, touched) for th in draws]
+            for name in normed[0]:
+                vals = np.array([d[name] for d in normed])
                 boot[name] = (
-                    float(np.percentile(arr[:, k], 2.5)),
-                    float(np.percentile(arr[:, k], 97.5)),
+                    float(np.percentile(vals, 2.5)),
+                    float(np.percentile(vals, 97.5)),
                 )
 
     return ClockFit(

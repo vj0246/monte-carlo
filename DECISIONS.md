@@ -231,47 +231,119 @@ values, never single quotes. The closed-form correction stays in the code becaus
 **Requirements:** vega weighting (error scales as price-error/vega, so weight by `vega^2`);
 subtract `Var(atm_iv_hat)`; report the clock with and without the correction.
 
-## D-08b · First estimates — FINDING, not yet a result
+## D-08b · The expiry-day effect — measured, with two explanations eliminated
 
-**The plan assumed variance accumulates faster on expiry days. It accumulates slower.** Two channels
-sharing no data agree.
+**Corrected 2026-09-08.** An earlier version of this decision said two independent channels agreed
+that expiry days carry less variance. **The options channel was right; the returns-channel
+"confirmation" was not evidence.** It rested on mean squared returns over 87 pre-regime expiry
+sessions, and bootstrapping the ratio gives [0.45, 1.14] — the interval spans 1 under every
+estimator, in both regimes. The Nifty returns channel has no power at this sample size, exactly as
+D-09 warned. The medians even point the other way (1.27 pre), because a handful of large
+*non*-expiry days were dragging the non-expiry mean up. One day, 2026-02-03, contributed over half
+the post-regime overnight mean on its own.
 
-Options channel, NIFTY, weights vs a plain Monday:
+**Options channel, within-regime specification (D-08b spec note), weekday weights normalised to
+mean one, 300 bootstrap draws resampling whole dates:**
 
 | Window | Mon | Tue | Wed | Thu | Fri | cond |
 |---|---|---|---|---|---|---|
-| Thu regime, to 2025-08-28 | 1.00 | 1.06 | 0.61 | **0.40** | 1.31 | 10.8 |
-| Tue regime, from 2025-09-02 | 1.00 | **0.42** | 0.79 | 0.68 | 0.61 | 4.4 |
+| Thu regime, to 2025-08-28 | 1.030 | 1.064 | 0.945 | **0.654** [0.432, 0.843] | 1.325 [1.078, 1.476] | 9.9 |
+| Tue regime, from 2025-09-02 | 1.459 [1.163, 1.780] | **0.607** [0.298, 0.844] | 1.093 | 0.928 | 0.880 | 4.0 |
 
-Returns channel, mean squared close-to-close Nifty return, no option data:
+In each regime the expiry weekday carries significantly less variance than an average session, the
+effect sizes match closely (0.65 and 0.61), and the low-weight weekday **moved Thursday to Tuesday
+when the rule moved**. That is the natural experiment firing, and it is the project's main result.
 
-| Window | expiry | non-expiry | ratio |
-|---|---|---|---|
-| Pre 2025-09-01 | 0.583 (n=87) | 0.800 (n=326) | **0.73** |
-| Post | 0.607 (n=56) | 0.708 (n=196) | **0.86** |
+**Powered replication in the cross-section.** Single-stock futures trade on the same sessions and
+supply ~128,000 stock-days instead of 87. Variance on index-expiry sessions against ordinary
+sessions: **0.805 [0.774, 0.839]** pre-regime and **0.888 [0.848, 0.938]** post. Significant, same
+direction as the options channel, and independent of it.
 
-In each regime the lowest-weight weekday is the expiry weekday, and it moved Thursday → Tuesday when
-the rule moved. The design worked; the sign is opposite to the hypothesis.
+**Two candidate mechanisms, both tested, both rejected.**
 
-**Leading explanation, mechanical not behavioural.** An option's remaining variance runs to its
-*settlement price*, and NSE settles on a time-average of the final window, not a point. The variance
-of an average of a Brownian path is about one third of its endpoint variance — close to what the
-Thursday fit reports. If that is the mechanism it is real, and belongs in the hedging model, because
-a hedger faces it.
+*Settlement averaging.* An expiring contract settles to a time-average of the final window, and the
+variance of an average of a Brownian path is about a third of its endpoint variance. If that were
+the mechanism, stock-days where the stock future itself expires (settling to a VWAP) would be far
+more suppressed than stock-days where only an index weekly expires and the stock future settles
+normally. They are not: **0.824 [0.774, 0.879]** versus **0.849 [0.819, 0.882]**. Overlapping.
 
-**Competing explanation daily data cannot exclude:** expiry-day variance may be mostly intraday and
-invisible to close-to-close returns. Both channels share this blind spot, so their agreement is
-weaker evidence than it looks.
+*Max-pain pinning.* Spot does not converge on the max-pain strike, it diverges from it at roughly
+the random-walk rate: mean distance 0.29% at 1-3 days to expiry grows to 0.83% by settlement, and
+the same pattern holds at every horizon (0.71% to 2.37% at 15-35 days). Max-pain sits near spot
+because open interest builds near spot; nothing pulls spot back to it.
 
-**Not yet a result** — no bootstrap intervals, no randomization inference. Recorded so the direction
-cannot later be quietly reversed to match the original hypothesis.
+What remains is a real, market-wide reduction in variance on index expiry sessions, unexplained by
+either candidate. Dealer gamma and positioning are the obvious next hypotheses and neither is
+testable with daily data.
 
-**Specification consequence.** Within one regime, expiry day is nearly a deterministic function of
-weekday (83 of 87 pre-regime expiries are Thursdays), so `a[Thu]` and the expiry dummy are not
-separately identified even where the rank check passes. Drop the expiry dummy within regime and let
-the expiry weekday carry the effect; keep it only across regimes, where the rule change identifies
-it. Reported `combined` cells with zero observations (Friday-plus-expiry never occurs pre-regime)
-are extrapolation, not estimate.
+**Still missing:** randomization inference (D-11). The effect is significant against a bootstrap of
+its own sample; it has not been tested against the distribution of effects at pseudo-event dates,
+so "the rule caused the move" remains unsupported (D-03).
+
+**Specification note.** Within one regime the expiry day is nearly a deterministic function of
+weekday — 83 of 87 pre-regime expiries are Thursdays — so `a[Thu]` and an expiry dummy are not
+separately identified. `fit(..., dummies=("weekend",))` drops the dummy within regime and lets the
+expiry weekday carry the effect; the dummy is identifiable only across regimes. A combined grid
+under the dummy specification contains cells with zero observations (Friday-plus-expiry never
+occurs pre-regime) and those are extrapolation, not estimate.
+
+**Normalisation bug, fixed.** Weights were reported as raw `exp(theta)`, i.e. relative to the
+pinned Monday, not mean-one as D-01 requires. Monday genuinely carries the weekend's information,
+so against a Monday baseline every weekday looked suppressed and "the expiry weekday is low" was
+partly a restatement of the weekend effect. `_normalise` now rescales to mean one over the window.
+
+---
+
+## D-08c · What the clock is actually worth
+
+**The hedging experiment is close to a null on this sample.** Short an at-the-money weekly
+straddle, delta-hedge once per session, both traders forced to the same entry price (D-15).
+200,000 paths, truth following the fitted Tuesday-regime clock:
+
+| cost (bp) | clock sd | calendar sd | difference sd | share of hedging-error sd |
+|---|---|---|---|---|
+| 0.0 | 497.06 | 493.52 | 11.52 | 2.3% |
+| 0.5 | 496.91 | 493.38 | 11.52 | 2.3% |
+| 2.0 | 496.46 | 492.97 | 11.52 | 2.3% |
+
+Discrete rebalancing error swamps the clock by a factor of forty, and trading cost does not change
+that. The plan made this the headline; on this sample it is not one.
+
+**The money is in the entry price, at one session to expiry.** A calendar-time trader misprices an
+option by the ratio of the clock variance of the sessions it spans to the flat variance it assumes:
+
+| opened | sessions to expiry | clock variance | flat | price error |
+|---|---|---|---|---|
+| Mon | 1 | 0.611 | 1.0 | **-21.8%** |
+| Fri | 2 | 2.080 | 2.0 | +2.0% |
+| Thu | 3 | 2.966 | 3.0 | -0.6% |
+| Wed | 4 | 3.900 | 4.0 | -1.3% |
+| Tue | 5 | 5.000 | 5.0 | 0.0% |
+
+Over a full week the weekday mix averages to one by construction and the error vanishes. Over a
+single session it does not. **The clock is a one-day-to-expiry phenomenon and it shows up in the
+price, not the hedge.** The corresponding near/far calendar spread opened on a Monday is mispriced
++9.5%.
+
+Caveat: -21.8% is a point estimate on a weight whose interval is [0.298, 0.844], which maps to a
+price-error range of roughly -45% to -8%. Wide, but negative throughout.
+
+---
+
+## D-08d · Variance risk premium and skew — supporting measurements
+
+**VRP.** Implied variance exceeds subsequent realized variance on 70% of weekly windows, median
+ratio 1.46 pre-regime and 1.51 post (1,977 observations). That is where the global literature puts
+it, and it is a useful end-to-end sanity check: a pipeline error in the forward, the inversion or
+the smile would not land on a plausible number by accident. Weekday variation in the premium is
+mild (1.31 to 1.57).
+
+**Skew.** The vega-weighted smile slope is stable across weekdays (-0.30 to -0.33 pre, -0.24 to
+-0.29 post) and shows no expiry-day pattern, so there is no "skew clock" to speak of. Curvature is
+a different matter: it rises sharply into expiry, from +2.8 at thirteen or more sessions to **+44.7
+at two to three**. Short-dated smiles are far more convex, which is consistent with the wings
+pricing jump risk that the at-the-money level does not see.
+
 
 ## D-09 · Returns channel — SET
 
