@@ -1,0 +1,11 @@
+{
+  "note": "Scheduled macro-event sessions for the D-07 event dummy. Populated ONLY where the date is verifiable. See DECISIONS.md D-07a.",
+  "generated_utc": "2026-09-08T10:09:43+00:00",
+  "union_budget": [
+    "2024-02-01",
+    "2025-02-01",
+    "2026-02-01"
+  ],
+  "rbi_mpc": [],
+  "rbi_mpc_status": "NOT POPULATED. RBI monetary policy announcement dates are not derivable from NSE archives and must not be asserted from memory (D-02). Supply from RBI press releases before relying on the event dummy."
+}
