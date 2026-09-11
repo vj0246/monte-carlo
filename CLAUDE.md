@@ -1,4 +1,4 @@
-# CLAUDE.md — Variance Clock (Indian Index Options)
+# CLAUDE.md - Variance Clock (Indian Index Options)
 
 ## Purpose
 Estimate the weekday/expiry-day shape of variance accumulation (the "variance clock") in NSE index
@@ -17,17 +17,18 @@ statsmodels, numba, pytest, matplotlib. Pydantic v2 for config. Notebooks explor
     uv run python -m src.ingest.regime_scan   # -> data/reference/regime_timeline.json
     uv run python -m src.ingest.build_panel   # data/raw -> data/panel/*.parquet
     uv run python -m src.iv.forward           # parity forwards (then src.iv.invert -> IV surface)
-    uv run python -m src.clock.estimate       # -> results/tables/clock_*.parquet
-    uv run python -m src.experiment.hedge     # headline simulation -> results/figures/
+    uv run python -m src.clock.estimate          # weekday weights + bootstrap CIs
+    uv run python -m src.analysis.expiry_effect  # mechanism tests; .permutation for D-11
+    uv run python -m src.experiment.mispricing   # entry-price error + hedging experiment
 
 ## Layout
     data/raw/nse/{fo,idx}/  immutable archives + MANIFEST.json (url, sha256) + calendar.json
     data/reference/         regime_timeline.json (generated), RBI policy + Budget dates
     data/panel/             parsed parquet, partitioned by year
     src/config.py           Pydantic settings, validated at import
-    src/ingest/ src/iv/ src/clock/ src/sim/ src/experiment/
+    src/ingest/ src/iv/ src/clock/ src/analysis/ src/sim/ src/experiment/
     tests/                  test_acceptance_*.py mirror the A1..A8 gates in DECISIONS.md
-    results/{tables,figures}/    the deliverable — there is no paper (D-21)
+    results/{tables,figures}/    the deliverable - there is no paper (D-21)
     DECISIONS.md            every modelling choice + why. Update BEFORE writing the code.
 
 ## Env
@@ -45,16 +46,15 @@ NAME only: NSE_DATA_KEY. Never inline, never logged.
   *median* across strikes; not futures/spot+div/`UndrlygPric`. Mean breaks on bad settles. D-05.
 - `E[IV^2]=E[IV]^2+Var(IV)`, so IV noise fakes an expiry-day weight. Measured via CE-vs-PE smile
   split: only 0.011% of variance at 2 DTE, because the vega-weighted fit averages ~50 quotes. Feed
-  the clock fitted ATM values, never single quotes — one quote per expiry makes it ~5%. D-08a.
+  the clock fitted ATM values, never single quotes - one quote per expiry makes it ~5%. D-08a.
 - `XpryDt` == `FininstrmActlXpryDt` on all 666 days. The exchange does NOT publish scheduled-vs-
   actual expiry; derive rolls (src/ingest/regime_scan.py). Calendar = dates a bhavcopy exists.
 - Iterate the returns channel over the trading-day sequence, never calendar dates. 5 weekend
   sessions exist; Budget Sun 2026-02-01 moved Nifty -1.98%. Dropping it reassigns that to Monday.
-- Lot size is a staircase, not a step: 50 -> 25 (2024-04-26) -> 25&75 (2024-11-22..2025-01-31) ->
-  75 -> 65&75 (2025-10-29) -> 65. Two land inside event windows. See D-10.
-- regime_scan pools weekly/monthly/long-dated expiries (no shared schedule). Split by tenor for D-08.
+- Lot size is a staircase (50->25->25&75->75->65&75->65); two changes land in event windows. D-10.
+- Stock-days are not independent: one session shares the market factor. Bootstrap by session, never
+  by stock-day; iid resampling gave CIs ~4x too narrow. D-08b.
 - v1 NSE-only; Sep-2025 moved every NSE index expiry to Tuesday, monthlies included, so Bank Nifty
-  is treated and the event has NO control unit. Interrupted time series, not diff-in-diff — never
+  is treated and the event has NO control unit. Interrupted time series, not diff-in-diff - never
   label it causal. Treated/control is a property of the event, not the symbol. D-03, D-04.
-- All dates are naive IST trading dates. Never localise, never store datetimes for daily data.
-- Any date asserted from memory is wrong until pinned to a circular in data/reference/. See D-02.
+- Dates are naive IST trading dates, never localised. A date from memory is wrong until measured (D-02).

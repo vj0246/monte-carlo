@@ -20,9 +20,11 @@ Run:  uv run python -m src.clock.estimate
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -54,6 +56,17 @@ class ClockFit:
     boot: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
+@functools.lru_cache(maxsize=8)
+def _expiry_days(panel_dir: str, symbol: str) -> frozenset[dt.date]:
+    """Every option expiry date for ``symbol``. Cached: it scans 1.85M panel rows, and the
+    permutation test (D-11) calls ``fit`` a few hundred times."""
+    panel = pl.concat(
+        [pl.read_parquet(f) for f in sorted(Path(panel_dir).glob("fo_*.parquet"))],
+        how="vertical_relaxed",
+    ).filter((pl.col("symbol") == symbol) & (pl.col("instr") == "IDO"))
+    return frozenset(panel["expiry"].unique().to_list())
+
+
 def _day_features(
     cfg: Settings, symbol: str, param_names: tuple[str, ...] = PARAM_NAMES
 ) -> tuple[list[dt.date], np.ndarray]:
@@ -61,11 +74,7 @@ def _day_features(
     cal = json.loads((cfg.raw_dir / "calendar.json").read_text(encoding="utf-8"))
     sessions = [dt.date.fromisoformat(d) for d in cal["trading_days"]]
 
-    panel = pl.concat(
-        [pl.read_parquet(f) for f in sorted(cfg.panel_dir.glob("fo_*.parquet"))],
-        how="vertical_relaxed",
-    ).filter((pl.col("symbol") == symbol) & (pl.col("instr") == "IDO"))
-    expiry_days = set(panel["expiry"].unique().to_list())
+    expiry_days = _expiry_days(str(cfg.panel_dir), symbol)
 
     macro = json.loads((cfg.reference_dir / "macro_events.json").read_text(encoding="utf-8"))
     event_days = {dt.date.fromisoformat(d) for d in macro["union_budget"] + macro["rbi_mpc"]}
@@ -103,8 +112,11 @@ def _observations(
         & pl.col(variance_col).is_not_null()
     )
     if window is not None:
+        # The whole variance span (t, T] must sit inside the window, not just the quote date. A
+        # pre-regime quote on 2025-08-27 expiring Tuesday 2025-09-02 sums weights from both
+        # regimes, which pulls the two regime estimates toward each other.
         atm = atm.filter(
-            (pl.col("trade_date") >= window[0]) & (pl.col("trade_date") <= window[1])
+            (pl.col("trade_date") >= window[0]) & (pl.col("expiry") <= window[1])
         )
 
     rows, cols, y, groups = [], [], [], []

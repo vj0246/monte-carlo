@@ -103,12 +103,14 @@ def index_decomposition(cfg: Settings = settings) -> None:
                 )
 
 
-def stock_futures_test(cfg: Settings = settings) -> None:
-    """The powered version. ~128k stock-days instead of 87 index sessions."""
+def stock_returns(cfg: Settings = settings) -> pl.DataFrame | None:
+    """Front-contract stock-future returns in percent, with squared returns in ``sq``.
+
+    Returns are taken within one contract, so a roll never enters as a price jump.
+    """
     path = cfg.panel_dir / "stock_futures.parquet"
     if not path.exists():
-        log.warning("no stock_futures.parquet; run build_stock_futures first")
-        return
+        return None
     s = pl.read_parquet(path).filter((pl.col("settle") > 0) & (pl.col("vol") > 0))
     front = (
         s.sort(["sym", "trade_date", "expiry"])
@@ -116,14 +118,21 @@ def stock_futures_test(cfg: Settings = settings) -> None:
         .agg(pl.all().sort_by("expiry").first())
         .sort(["sym", "expiry", "trade_date"])
     )
-    # Returns are taken within one contract, so a roll never enters as a price jump.
-    rets = (
+    return (
         front.with_columns(pl.col("settle").shift(1).over(["sym", "expiry"]).alias("prev"))
         .filter(pl.col("prev").is_not_null())
         .with_columns(((pl.col("settle") / pl.col("prev")).log() * 100).alias("ret"))
         .filter(pl.col("ret").abs() < 20)
         .with_columns((pl.col("ret") ** 2).alias("sq"))
     )
+
+
+def stock_futures_test(cfg: Settings = settings) -> None:
+    """The powered version. ~128k stock-days instead of 87 index sessions."""
+    rets = stock_returns(cfg)
+    if rets is None:
+        log.warning("no stock_futures.parquet; run build_panel first")
+        return
 
     panel = pl.concat(
         [pl.read_parquet(f) for f in sorted(cfg.panel_dir.glob("fo_*.parquet"))],
@@ -137,20 +146,36 @@ def stock_futures_test(cfg: Settings = settings) -> None:
         pl.col("trade_date").is_in(sorted(weekly - monthly)).alias("idx_weekly_only"),
         pl.col("trade_date").is_in(sorted(monthly)).alias("idx_monthly"),
     )
-    baseline = rets.filter(
-        ~pl.col("idx_weekly_only") & ~pl.col("idx_monthly") & ~pl.col("own_expiry")
-    )["sq"].to_numpy()
-    rng = np.random.default_rng(0)
+    def session_means(frame: pl.DataFrame) -> np.ndarray:
+        # Stocks on one session share the market factor, so the session, not the stock-day, is
+        # the independent unit. Resampling stock-days as if independent gave intervals about four
+        # times too narrow: [0.773, 0.839] pre-regime, against [0.675, 0.951] clustered.
+        return frame.group_by("trade_date").agg(pl.col("sq").mean())["sq"].to_numpy()
 
-    log.info("--- stock-future variance vs baseline sessions (%d stock-days) ---", rets.height)
+    rng = np.random.default_rng(0)
+    any_expiry = pl.col("idx_weekly_only") | pl.col("idx_monthly")
+    log.info("--- stock-future variance, session-clustered (%d stock-days) ---", rets.height)
+    for label, keep in (
+        ("pre", pl.col("trade_date") < REGIME_SPLIT),
+        ("post", pl.col("trade_date") >= REGIME_SPLIT),
+    ):
+        sub = rets.filter(keep)
+        r, lo, hi = _ratio_ci(
+            session_means(sub.filter(any_expiry)), session_means(sub.filter(~any_expiry)), np.mean, rng
+        )
+        log.info("%-4s index expiry vs other sessions  ratio=%.3f [%.3f, %.3f]", label, r, lo, hi)
+
+    baseline = session_means(
+        rets.filter(~pl.col("idx_weekly_only") & ~pl.col("idx_monthly") & ~pl.col("own_expiry"))
+    )
     for label, cond in (
         ("index weekly expiry, stock future NOT expiring", pl.col("idx_weekly_only") & ~pl.col("own_expiry")),
         ("index monthly expiry, stock future ALSO expiring", pl.col("idx_monthly") & pl.col("own_expiry")),
     ):
-        sub = rets.filter(cond)["sq"].to_numpy()
+        sub = session_means(rets.filter(cond))
         r, lo, hi = _ratio_ci(sub, baseline, np.mean, rng)
-        log.info("%-50s ratio=%.3f [%.3f, %.3f]  n=%d", label, r, lo, hi, len(sub))
-    log.info("Similar ratios mean the settlement-averaging mechanism is not what drives this.")
+        log.info("%-50s ratio=%.3f [%.3f, %.3f]  sessions=%d", label, r, lo, hi, len(sub))
+    log.info("Overlapping intervals: no evidence for settlement averaging, and no rejection of it.")
 
 
 def max_pain(cfg: Settings = settings) -> None:
