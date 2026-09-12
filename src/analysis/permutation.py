@@ -1,38 +1,33 @@
-"""Randomization inference for the Sep-2025 event (D-11).
+"""Randomization inference for the Sep-2025 event (D-11, D-22).
 
-The question is not "is the effect significant against its own sample" -- the bootstrap already
-says yes -- but "how unusual is this effect among all the dates it could have been measured at?".
-So the regime-change statistic is recomputed at every eligible pseudo-event date and the true date
-is ranked against that distribution.
-
-Statistic, pre-registered by the hypothesis rather than chosen after looking:
+Recompute the regime-change statistic at every eligible pseudo-event date and rank the true date
+against that distribution. Statistic, pre-registered before any result:
 
     S(tau) = [ln w_Tue(post) - ln w_Tue(pre)] - [ln w_Thu(post) - ln w_Thu(pre)]
 
-The rule moved expiry from Thursday to Tuesday and expiry sessions carry less variance, so Tuesday
-should fall and Thursday should rise: S is predicted negative at the true date and near zero at
-dates inside one regime. One-sided p-value: share of pseudo dates with S at least as negative.
+At Sep-2025 Nifty moved Thursday to Tuesday and Sensex moved Tuesday to Thursday (measured,
+``regime_timeline*.json``). If each clock tracks its own expiry (H_own, D-22), ``S_NIFTY < 0``,
+``S_SENSEX > 0``, and the difference ``DiD = S_NIFTY - S_SENSEX`` is strongly negative. Any
+calendar shock common to both markets cancels in the difference, which is the reason Sensex was
+added: the NSE-only test (``S_NIFTY`` alone) came back null. If the suppression is market-wide and
+follows the dominant NSE expiry (H_market), ``S_SENSEX`` looks like ``S_NIFTY`` and DiD is near 0.
 
-Computed on two channels that share no data:
-
-* options channel -- weekday weights from ``src.clock.estimate``, within-regime specification;
-* stock channel -- mean squared single-stock-future return by weekday. No model fit involved.
+Also reported: the stock-future channel (mean squared return by weekday, no model fit). Stocks trade
+on NSE only, so they carry no DiD.
 
 Eligibility. A pseudo window [tau-h, tau+h) must lie inside the sample, must not contain the real
-Sep-2025 boundary, and must not overlap the Nov-2024 blackout (2024-11-13, the last Bank Nifty
-weekly, to 2025-01-31, the end of the lot-size overlap; D-10). Windows are counted in trading
-sessions, never calendar days.
+Sep-2025 boundary, and must not overlap the Nov-2024 blackout (2024-11-13 to 2025-01-31), which
+also covers the Sensex Friday-to-Tuesday change of 2025-01-03 / 01-07 and its lot-size overlap.
+Windows are counted in trading sessions.
 
-**Degenerate fits.** On three-month windows a quarter of the options-channel fits are numerically
-broken: weekday weights outside [0.1, 10] and condition numbers up to 1e9. Those are failed
-estimates, not draws from the null, and they put log-weight differences of +/-200 into the null
-distribution. A sensitivity row drops any date whose fit has condition number above ``MAX_COND``
-or any weekday weight outside [0.1, 10]. That rule was written *after* the raw test had already
-triggered the D-11 kill condition, so it is reported beside the raw result and never instead of it.
+Degenerate fits. On three-month windows some clock fits are numerically broken (weights outside
+[0.1, 10], condition numbers to 1e9). A sensitivity row drops them. That rule was written after
+the NSE-only test had come back null, so it is reported beside the pre-registered rows, never
+instead of them.
 
-Honest limit: adjacent pseudo dates share almost all their data. The number of *independent*
-pseudo windows is roughly the eligible span divided by the window length -- about five at h = 63.
-No p-value from this design can be much smaller than one in six, however the ranks fall.
+Honest limit: adjacent pseudo dates share almost all their data; there are about five independent
+pseudo windows at h = 63, so no p-value from this design can be much smaller than one in six. The
+DiD removes common shocks; it does not add independent windows.
 
 Run:  uv run python -m src.analysis.permutation
 """
@@ -57,6 +52,7 @@ BLACKOUT = (dt.date(2024, 11, 13), dt.date(2025, 1, 31))
 STEP = 5  # one candidate per trading week; finer steps only add near-duplicate windows
 MAX_COND = 30.0
 MAX_ABS_LOGW = float(np.log(10.0))
+SYMBOLS = ("NIFTY", "SENSEX")
 
 
 def _sessions(cfg: Settings) -> list[dt.date]:
@@ -76,10 +72,10 @@ def _eligible(sessions: list[dt.date], h: int) -> list[int]:
     return out
 
 
-def _options_stat(cfg: Settings, pre: tuple, post: tuple) -> tuple[float, float, float]:
+def _options_stat(cfg: Settings, symbol: str, pre: tuple, post: tuple) -> tuple[float, float, float]:
     """S, the worse condition number of the two fits, and the largest |ln weight| in either."""
-    a = fit(cfg, "NIFTY", "total_var_corr", window=pre, dummies=("weekend",))
-    b = fit(cfg, "NIFTY", "total_var_corr", window=post, dummies=("weekend",))
+    a = fit(cfg, symbol, "total_var_corr", window=pre, dummies=("weekend",))
+    b = fit(cfg, symbol, "total_var_corr", window=post, dummies=("weekend",))
     s = float(np.log(b.weights["Tue"] / a.weights["Tue"]) - np.log(b.weights["Thu"] / a.weights["Thu"]))
     extreme = max(abs(np.log(f.weights[d])) for f in (a, b) for d in WEEKDAYS)
     return s, max(a.condition_number, b.condition_number), float(extreme)
@@ -106,43 +102,47 @@ def run(cfg: Settings = settings, h: int = 63) -> pl.DataFrame:
     for tau in [split, *_eligible(sessions, h)]:
         pre = (sessions[tau - h], sessions[tau - 1])
         post = (sessions[tau], sessions[tau + h - 1])
-        try:
-            s_opt, cond, extreme = _options_stat(cfg, pre, post)
-        except ValueError:  # too few observations in a window; the date is not usable
-            s_opt, cond, extreme = float("nan"), float("inf"), float("inf")
-        rows.append(
-            {
-                "tau": sessions[tau],
-                "is_event": tau == split,
-                "s_options": s_opt,
-                "cond": cond,
-                "max_abs_logw": extreme,
-                "s_stocks": _stock_stat(rets, pre, post) if rets is not None else float("nan"),
-            }
-        )
+        row: dict = {"tau": sessions[tau], "is_event": tau == split}
+        for symbol in SYMBOLS:
+            key = symbol.lower()
+            try:
+                s, cond, extreme = _options_stat(cfg, symbol, pre, post)
+            except ValueError:  # too few observations in a window; the date is not usable
+                s, cond, extreme = float("nan"), float("inf"), float("inf")
+            row |= {f"s_{key}": s, f"cond_{key}": cond, f"logw_{key}": extreme}
+        row["did"] = row["s_nifty"] - row["s_sensex"]
+        row["s_stocks"] = _stock_stat(rets, pre, post) if rets is not None else float("nan")
+        rows.append(row)
     return pl.DataFrame(rows)
 
 
 def summarise(df: pl.DataFrame, h: int) -> None:
-    healthy = (pl.col("cond") <= MAX_COND) & (pl.col("max_abs_logw") <= MAX_ABS_LOGW)
+    healthy = pl.lit(True)
+    for key in ("nifty", "sensex"):
+        healthy = healthy & (pl.col(f"cond_{key}") <= MAX_COND) & (pl.col(f"logw_{key}") <= MAX_ABS_LOGW)
+
     log.info("--- randomization inference, h = %d sessions ---", h)
-    for col, label, frame in (
-        ("s_options", "options, all fits", df),
-        ("s_options", "options, degenerate excluded", df.filter(healthy)),
-        ("s_stocks", "stocks", df),
+    # (label, column, frame, predicted sign under H_own)
+    for label, col, frame, sign in (
+        ("NIFTY options", "s_nifty", df, -1),
+        ("SENSEX options", "s_sensex", df, +1),
+        ("DiD NIFTY - SENSEX", "did", df, -1),
+        ("DiD, degenerate excluded", "did", df.filter(healthy), -1),
+        ("stocks (NSE)", "s_stocks", df, -1),
     ):
         event = frame.filter(pl.col("is_event"))
-        if event.is_empty():
-            log.info("%-30s true event itself fails the conditioning rule; not evaluable", label)
+        if event.is_empty() or np.isnan(event[col][0]):
+            log.info("%-26s true event not evaluable", label)
             continue
-        star = event[col][0]
+        star = float(event[col][0])
         null = frame.filter(~pl.col("is_event"))[col].drop_nans().to_numpy()
-        p = (1 + int((null <= star).sum())) / (1 + len(null))
+        extreme = (null <= star) if sign < 0 else (null >= star)
+        p = (1 + int(extreme.sum())) / (1 + len(null))
         pct = 100 * float((null < star).mean())
         verdict = "inside middle 90%: NULL" if 5 <= pct <= 95 else "outside middle 90%"
         log.info(
-            "%-30s n=%3d  S*=%+.3f  null median=%+.3f  pct=%5.1f  p=%.3f  %s",
-            label, len(null), star, float(np.median(null)), pct, p, verdict,
+            "%-26s n=%3d  S*=%+.3f  null median=%+.3f  pct=%5.1f  p=%.3f (%s-sided)  %s",
+            label, len(null), star, float(np.median(null)), pct, p, "lower" if sign < 0 else "upper", verdict,
         )
 
 
