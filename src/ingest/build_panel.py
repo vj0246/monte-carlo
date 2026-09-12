@@ -105,10 +105,15 @@ def _parse_day(cfg: Settings, day: dt.date) -> pl.DataFrame | None:
     path = cfg.raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv.zip"
     with zipfile.ZipFile(path) as z:
         raw = z.read(z.namelist()[0])
+    return _tidy(raw, day, cfg.option_symbols)
+
+
+def _tidy(raw: bytes, day: dt.date, symbols: tuple[str, ...]) -> pl.DataFrame | None:
+    """One day's UDiFF bhavcopy as panel rows. NSE and BSE share the schema (D-22)."""
     df = pl.read_csv(
         io.BytesIO(raw), columns=_SRC_COLS, schema_overrides={c: pl.Utf8 for c in _SRC_COLS}
     ).filter(
-        pl.col("TckrSymb").is_in(list(cfg.option_symbols))
+        pl.col("TckrSymb").is_in(list(symbols))
         & pl.col("FinInstrmTp").is_in([_INDEX_OPTION, _INDEX_FUTURE])
     )
     if df.is_empty():
@@ -144,13 +149,31 @@ def build_options_panel(cfg: Settings = settings) -> dict[int, int]:
         if frame is not None:
             by_year[day.year].append(frame)
 
+    return _write_years(cfg, by_year, "fo")
+
+
+def build_bse_panel(cfg: Settings = settings) -> dict[int, int]:
+    """Sensex options and futures (D-22), on the NSE session sequence so both exchanges share one
+    calendar. Written as ``fo_bse_<year>.parquet``; downstream code keys on ``symbol``."""
+    by_year: dict[int, list[pl.DataFrame]] = defaultdict(list)
+    for day in _trading_days(cfg):
+        path = cfg.bse_raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv"
+        if not path.exists():
+            continue
+        frame = _tidy(path.read_bytes(), day, cfg.bse_option_symbols)
+        if frame is not None:
+            by_year[day.year].append(frame)
+    return _write_years(cfg, by_year, "fo_bse")
+
+
+def _write_years(cfg: Settings, by_year: dict[int, list[pl.DataFrame]], stem: str) -> dict[int, int]:
     cfg.panel_dir.mkdir(parents=True, exist_ok=True)
     written: dict[int, int] = {}
     for year, frames in sorted(by_year.items()):
         panel = pl.concat(frames, how="vertical_relaxed").sort(
             ["trade_date", "symbol", "expiry", "strike", "opt_type"]
         )
-        panel.write_parquet(cfg.panel_dir / f"fo_{year}.parquet")
+        panel.write_parquet(cfg.panel_dir / f"{stem}_{year}.parquet")
         written[year] = panel.height
     return written
 
@@ -178,6 +201,25 @@ def build_index_panel(cfg: Settings = settings) -> int:
                         "high": float(row["High Index Value"]),
                         "low": float(row["Low Index Value"]),
                         "close": float(row["Closing Index Value"]),
+                    }
+                )
+    sensex = cfg.bse_raw_dir / "sensex_daily.csv"
+    if sensex.exists():
+        position = {d: i for i, d in enumerate(_trading_days(cfg))}
+        with sensex.open(encoding="utf-8-sig") as fh:
+            for row in csv.DictReader(fh):
+                day = dt.datetime.strptime(row["Date"], "%d-%B-%Y").date()
+                if day not in position:  # outside the NSE window; D-22 keeps one calendar
+                    continue
+                rows.append(
+                    {
+                        "trade_date": day,
+                        "session_idx": position[day],
+                        "index_name": "SENSEX",
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
                     }
                 )
     panel = pl.DataFrame(rows).sort(["index_name", "trade_date"])
@@ -230,6 +272,8 @@ def main(cfg: Settings = settings) -> None:
         log.info("fo_%d.parquet: %d rows", year, n)
     log.info("total contract-days: %d", sum(written.values()))
     log.info("stock_futures.parquet: %d rows", build_stock_futures_panel(cfg))
+    for year, n in build_bse_panel(cfg).items():
+        log.info("fo_bse_%d.parquet: %d rows", year, n)
 
 
 if __name__ == "__main__":

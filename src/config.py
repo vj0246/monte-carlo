@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # Index levels needed for the returns channel of the treated symbols (D-09).
     treated_indices: tuple[str, ...] = ("Nifty 50", "Nifty Bank")
 
+    # BSE (D-22): same UDiFF schema as NSE, served as plain CSV.
+    bse_option_symbols: tuple[str, ...] = ("SENSEX",)
+    bse_referer: str = "https://www.bseindia.com/"
+
     # NSE archive access. The UA and Referer are mandatory, not defensive: without them
     # nsearchives returns a block page rather than the file (D-02).
     user_agent: str = (
@@ -70,6 +74,10 @@ class Settings(BaseSettings):
         return self.data_root / "raw" / "nse"
 
     @property
+    def bse_raw_dir(self) -> Path:
+        return self.data_root / "raw" / "bse"
+
+    @property
     def panel_dir(self) -> Path:
         return self.data_root / "panel"
 
@@ -92,6 +100,14 @@ class Settings(BaseSettings):
             "Referer": self.referer,
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
+        }
+
+    @property
+    def bse_http_headers(self) -> dict[str, str]:
+        return {
+            **self.http_headers,
+            "Referer": self.bse_referer,
+            "Origin": self.bse_referer.rstrip("/"),
         }
 
 
