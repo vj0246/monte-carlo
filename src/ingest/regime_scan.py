@@ -50,9 +50,15 @@ def trading_days(cfg: Settings) -> list[dt.date]:
 
 
 def _read_fo(cfg: Settings, day: dt.date, symbol: str) -> pl.DataFrame:
-    path = cfg.raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv.zip"
-    with zipfile.ZipFile(path) as z:
-        raw = z.read(z.namelist()[0])
+    if symbol in cfg.bse_option_symbols:
+        path = cfg.bse_raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv"
+        if not path.exists():
+            return pl.DataFrame()
+        raw = path.read_bytes()
+    else:
+        path = cfg.raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv.zip"
+        with zipfile.ZipFile(path) as z:
+            raw = z.read(z.namelist()[0])
     df = pl.read_csv(
         io.BytesIO(raw), columns=_FO_COLS, schema_overrides={c: pl.Utf8 for c in _FO_COLS}
     )
@@ -84,39 +90,58 @@ def _weekday_runs(expiries: list[dt.date]) -> list[dict]:
     return runs
 
 
-def _split_regimes(expiries: list[dt.date]) -> tuple[list[dict], int]:
-    """Locate the expiry-weekday regime change by exhaustive change-point search.
+def _segments(
+    expiries: list[dt.date], min_len: int = 5, min_gain: int = 3
+) -> tuple[list[dict], int]:
+    """Expiry-weekday regimes by binary segmentation.
 
-    Segmenting on unbroken runs does not work: a single holiday-rolled expiry breaks the run, so
-    every roll would masquerade as its own regime and no expiry would have a regime to deviate
-    from. Instead the sample is split at the point that maximises agreement between each side's
-    weekday and that side's modal weekday.
+    Split a run of expiries where doing so most reduces the number of expiries that disagree with
+    their segment's modal weekday; recurse on each side; stop when the best split fixes fewer than
+    ``min_gain`` expiries. A lone holiday roll can never clear that bar, a real regime change always
+    does. The number of regimes is found, not assumed: Nifty has one change in the sample, Sensex
+    is expected to have two, and an earlier version that hard-coded a single split could not have
+    noticed either way.
 
-    Returns the segments and the residual misclassification count. That count is the self-check:
-    it should equal the number of genuine holiday rolls. If a second regime change ever enters the
-    sample the residual jumps, and gate A1 catches it rather than the result quietly absorbing it.
+    Returns the regimes and the residual count of off-weekday expiries. The residual is *not* a
+    self-check -- it equals the number of flagged rolls by definition. The check is ``min_gain``:
+    any further regime change would have been split out.
     """
     wd = [e.strftime("%a") for e in expiries]
-    n = len(wd)
 
-    def agree(seg: list[str]) -> int:
-        return Counter(seg).most_common(1)[0][1] if seg else 0
-
-    # Require both sides non-trivial so a degenerate split cannot win.
-    best_cut = max(range(5, n - 5), key=lambda i: agree(wd[:i]) + agree(wd[i:]))
-    segments = []
-    for lo, hi in ((0, best_cut), (best_cut, n)):
+    def cost(lo: int, hi: int) -> int:
         seg = wd[lo:hi]
-        segments.append(
-            {
-                "weekday": Counter(seg).most_common(1)[0][0],
-                "start": expiries[lo].isoformat(),
-                "end": expiries[hi - 1].isoformat(),
-                "n_expiries": hi - lo,
-            }
-        )
-    residual = n - (agree(wd[:best_cut]) + agree(wd[best_cut:]))
-    return segments, residual
+        return len(seg) - Counter(seg).most_common(1)[0][1] if seg else 0
+
+    def split(lo: int, hi: int) -> list[tuple[int, int]]:
+        cuts = range(lo + min_len, hi - min_len + 1)
+        if not cuts:
+            return [(lo, hi)]
+        best = min(cuts, key=lambda i: cost(lo, i) + cost(i, hi))
+        if cost(lo, hi) - (cost(lo, best) + cost(best, hi)) < min_gain:
+            return [(lo, hi)]
+        return split(lo, best) + split(best, hi)
+
+    def mode(lo: int, hi: int) -> str:
+        return Counter(wd[lo:hi]).most_common(1)[0][0]
+
+    # Greedy splitting can cut inside one regime when the best top-level cut lands there (Sensex:
+    # Tuesday split at 2025-03-28 / 04-01). Neighbouring segments with one weekday are one regime.
+    bounds: list[tuple[int, int]] = []
+    for lo, hi in split(0, len(wd)):
+        if bounds and mode(*bounds[-1]) == mode(lo, hi):
+            bounds[-1] = (bounds[-1][0], hi)
+        else:
+            bounds.append((lo, hi))
+    regimes = [
+        {
+            "weekday": Counter(wd[lo:hi]).most_common(1)[0][0],
+            "start": expiries[lo].isoformat(),
+            "end": expiries[hi - 1].isoformat(),
+            "n_expiries": hi - lo,
+        }
+        for lo, hi in bounds
+    ]
+    return regimes, sum(cost(lo, hi) for lo, hi in bounds)
 
 
 def _regime_of(expiry: dt.date, regimes: list[dict]) -> str | None:
@@ -153,7 +178,7 @@ def scan(cfg: Settings = settings, symbol: str = "NIFTY") -> dict:
     # Only expiries that are themselves trading days in the sample can be dated reliably.
     observed = sorted(e for e in expiries if e in day_set)
     runs = _weekday_runs(observed)
-    regimes, residual = _split_regimes(observed)
+    regimes, residual = _segments(observed)
     _WD = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
     rolls = []
     for e in observed:
@@ -204,8 +229,7 @@ def scan(cfg: Settings = settings, symbol: str = "NIFTY") -> dict:
         "expiry_weekday_runs": runs,
         "expiry_regimes": regimes,
         "regime_split_residual": residual,
-        "regime_split_residual_check": "must equal len(holiday_rolls); a mismatch means a second "
-        "regime change entered the sample",
+        "regime_split_residual_note": "equals len(holiday_rolls) by definition; not a check",
         "holiday_rolls": rolls,
         "weekend_sessions": specials,
     }
@@ -213,16 +237,18 @@ def scan(cfg: Settings = settings, symbol: str = "NIFTY") -> dict:
 
 def main(cfg: Settings = settings) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    out = scan(cfg)
     cfg.reference_dir.mkdir(parents=True, exist_ok=True)
-    path = cfg.reference_dir / "regime_timeline.json"
-    path.write_text(json.dumps(out, indent=2), encoding="utf-8")
-    log.info("wrote %s", path)
-    log.info("lot-size changes: %d", len(out["lot_size_changes"]))
-    log.info("expiry regimes: %s", [(r["weekday"], r["start"], r["end"]) for r in out["expiry_regimes"]])
-    log.info("holiday rolls: %d", len(out["holiday_rolls"]))
-    log.info("weekend sessions: %d", len(out["weekend_sessions"]))
-    log.info("XpryDt vs FininstrmActlXpryDt mismatched rows: %d", out["xpry_vs_actual_mismatched_rows"])
+    targets = [("NIFTY", "regime_timeline.json")]
+    if (cfg.bse_raw_dir / "calendar.json").exists():
+        targets.append(("SENSEX", "regime_timeline_sensex.json"))
+    for symbol, name in targets:
+        out = scan(cfg, symbol)
+        (cfg.reference_dir / name).write_text(json.dumps(out, indent=2), encoding="utf-8")
+        log.info("=== %s -> %s ===", symbol, name)
+        log.info("lot-size changes: %s", [(c["first_seen"], c["lot_sizes"]) for c in out["lot_size_changes"]])
+        log.info("expiry regimes: %s", [(r["weekday"], r["start"], r["end"], r["n_expiries"]) for r in out["expiry_regimes"]])
+        kinds = Counter(r["kind"] for r in out["holiday_rolls"])
+        log.info("off-weekday expiries: %s", dict(kinds))
 
 
 if __name__ == "__main__":
