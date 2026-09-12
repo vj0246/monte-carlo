@@ -28,6 +28,8 @@ Public NSE archives only, no credentials. Files land immutable under `data/raw/n
 | F&O bhavcopy, UDiFF | `nsearchives.nseindia.com/content/fo/BhavCopy_NSE_FO_0_0_0_<YYYYMMDD>_F_0000.csv.zip` | 2024-01-02 on |
 | F&O bhavcopy, legacy | `.../content/historical/DERIVATIVES/<YYYY>/<MON>/fo<DDMMMYYYY>bhav.csv.zip` | to 2024-07-03 |
 | All-index close | `.../content/indices/ind_close_all_<DDMMYYYY>.csv` | both eras |
+| BSE F&O bhavcopy, UDiFF | see D-22 | from 2024-01-01 |
+| Sensex OHLC | see D-22 | from 2024-01-01 |
 
 Needs a browser `User-Agent` **and** `Referer: https://www.nseindia.com/`. No cookie handshake.
 
@@ -71,8 +73,11 @@ From `src.ingest.regime_scan` over 666 trading days → `data/reference/regime_t
 | Thursday | 2024-01-04 → 2025-08-28 | 87 |
 | Tuesday | 2025-09-02 → 2026-09-01 | 56 |
 
-Sep-2025 pins to the gap between 2025-08-28 and 2025-09-02. Split residual equals the off-weekday
-expiry count exactly (11 = 11) - the self-check. A second regime change would make them diverge.
+Sep-2025 pins to the gap between 2025-08-28 and 2025-09-02. **Corrected 2026-09-11:** an earlier version called "split residual equals the off-weekday
+expiry count (11 = 11)" a self-check. It is a tautology: rolls are defined as expiries off their
+regime's weekday, and the residual counts exactly those. The real check is binary segmentation
+with a minimum gain: a further split is taken only if it fixes at least three expiries, which a
+lone holiday roll never does and a real regime change always does. On Nifty it finds one change.
 
 **Off-weekday expiries: 8 backward rolls, 3 not rolls.** A holiday roll only moves expiry *earlier*.
 2025-09-25 (+2), 2025-12-24 (+1) and 2026-06-25 (+2) sit later, so they are non-weekly tenors, and
@@ -100,17 +105,20 @@ next Monday's close-to-close return. Dropping a session is a reassignment, not a
 
 The Budget dummy attaches to the session the Budget was presented in. In 2026 that was a Sunday.
 
-## D-03 · Scope - SET
+## D-03 · Scope - SET (revised 2026-09-11)
 
-NSE only. Treated: Nifty 50. **BSE Sensex deferred to v2.**
+NSE and BSE. At Sep-2025 two units are treated in opposite directions on the same date: Nifty 50
+(Thursday to Tuesday) and Sensex (D-22). Sensex was deferred to v2 until D-11 came back null on the
+NSE-only design; it was pulled into v1 on 2026-09-11 because it is the only addition that can turn
+the Sep-2025 interrupted time series into a difference in differences.
 
-Sensex was the only unit with opposite-signed treatment at Sep-2025, so v1 has no cross-sectional
-control for the headline event. **The Sep-2025 result is an interrupted time series, not a
-difference in differences.** It supports "the clock moved when the rule moved" and not "the rule
-caused it". The writeup must say exactly that.
+Until the Sensex estimates exist and pass their own gates, the Sep-2025 result stays labelled an
+interrupted time series. It supports "the clock moved when the rule moved", not "the rule caused
+it".
 
-What carries identification instead: the D-11 permutation test (now load-bearing, not a formality)
-and the D-04a control indices.
+Identification was to rest on the Nifty-minus-Sensex difference (D-22), ranked by the D-11
+permutation test. **It could not be estimated**: Sensex is too thin for the three-month windows the
+test needs (D-22). The Sep-2025 result therefore stays an interrupted time series.
 
 ## D-04 · Bank Nifty is treated, not a control - SET
 
@@ -265,6 +273,11 @@ was an artefact of the stock-day bootstrap. *Max-pain pinning*: spot diverges fr
 strike at roughly the random-walk rate (0.29% at 1-3 days to expiry grows to 0.83% by settlement).
 A point comparison, but the direction is unambiguous.
 
+**Stable across sub-samples (2026-09-12).** Splitting each Nifty regime in half: Thursday 0.675
+[0.45, 0.87] and 0.484 [0.14, 0.91]; Tuesday 0.549 [0.12, 0.80] and 0.498 [0.06, 1.16]. Three of four
+intervals exclude 1 and the direction never flips. The same check on Sensex does not reproduce the
+pattern (D-22).
+
 **Whether the rule moved the low-variance day is D-11, and D-11 is null.**
 
 **Specification note.** Within one regime the expiry day is nearly a deterministic function of
@@ -403,9 +416,9 @@ it is recorded and not claimed.
 there are about five independent pseudo windows. No p-value from this design can be much smaller
 than one in six. The stock channel involves no model fit and is plainly null (percentile 30-35).
 
-**What could change the answer:** BSE Sensex (opposite-signed treatment on the same date, v2); the
-legacy 2023 reader (more pseudo windows; D-02 made it conditional on D-11 coming out thin, which it
-did); intraday data.
+**What could change the answer:** BSE Sensex (tried 2026-09-12: 39 of 48 Sensex window fits are
+degenerate, so the DiD is not evaluable, D-22); the legacy 2023 reader (more pseudo windows; D-02 made
+it conditional on D-11 coming out thin, which it did); intraday data.
 
 ## D-12 · Simulation baseline - SET
 
@@ -523,6 +536,116 @@ The project folder. No paper. Results are parquet under `results/tables/` and fi
 Since no prose document carries the caveats, code must. The D-03 labelling (interrupted time series,
 not diff-in-diff) is emitted in result metadata and printed by `src.experiment.hedge`, so a result
 cannot be read out of the folder without its limitation attached.
+
+---
+
+## D-22 · BSE Sensex, the opposite-signed unit - SET
+
+Added 2026-09-11. D-11 came back null on NSE data alone, and a single-series design has about five
+independent pseudo windows, which cannot produce a small p-value. A second series treated in the
+opposite direction on the same date differences out every common calendar shock.
+
+**Sources, probed live 2026-09-11.**
+
+| Source | URL pattern | Notes |
+|---|---|---|
+| F&O bhavcopy, UDiFF | `www.bseindia.com/download/Bhavcopy/Derivative/BhavCopy_BSE_FO_0_0_0_<YYYYMMDD>_F_0000.CSV` | from 2024-01-01; same 34-column schema as NSE; plain CSV, not zip |
+| Sensex OHLC | `api.bseindia.com/BseIndiaAPI/api/ProduceCSVForDate/w?strIndex=SENSEX&dtFromDate=DD/MM/YYYY&dtToDate=DD/MM/YYYY` | one request covers the sample: 671 rows, 2024-01-01 to 2026-09-10, all five weekend sessions present |
+
+Needs `Referer: https://www.bseindia.com/`.
+
+**BSE never 404s a non-session.** A holiday (2025-08-15) and a Saturday (2025-08-30) both return
+HTTP 200 with the same 14,287-byte HTML page. The downloader reads that page as "no session", which
+means a block page would be read the same way and would silently delete real sessions. Guard: the
+BSE calendar is derived independently and cross-checked against the NSE calendar. The exchanges
+share one holiday list, so any disagreement is a download fault until shown otherwise.
+
+**Measured timeline** (`regime_scan`, 2026-09-11). Sensex weekly expiry: Friday 2024-01-05 to
+2025-01-03 (54 expiries), Tuesday 2025-01-07 to 2025-08-26 (39), Thursday 2025-09-04 to 2026-09-03
+(53). At Sep-2025 Sensex moved Tuesday to Thursday on the same date Nifty moved Thursday to Tuesday:
+opposite-signed treatment, measured rather than assumed. Five Friday expiries sit inside the Tuesday
+regime (2025-01-10 to 2025-03-28), contracts listed under the old schedule running off. Lot size 10,
+then 10 and 20 together from 2024-12-02, then 20 from 2025-01-29 and unchanged after, so the Sensex
+post-window has no counterpart to Nifty's 2025-10-29 lot change. The Jan-2025 Friday-to-Tuesday
+change is a Sensex-only event, but it sits inside the Nov-2024 blackout and shares its confound.
+
+**The calendar cross-check found a real fault on its first run.** All 666 NSE sessions are present
+on BSE. BSE has one more, 2026-09-07: the NSE download ran that day before the file was published,
+cached "no session", and the cache never expires. Absences within three days of a run are no longer
+cached. The 666-session sample is unchanged.
+
+**Thinner market.** On 2025-09-03: 614 Sensex option rows against ~1,500 for NIFTY, futures only for
+the two monthlies, lot size 20. Same parity-forward method (D-05) and unchanged liquidity filters
+(D-06), so fewer quotes survive. If the Sensex clock fails A3 conditioning, the DiD does not run.
+
+**Pre-registered predictions, written before any Sensex estimate exists.** The Sensex expiry-weekday
+history is to be measured by `regime_scan`, not assumed. Working expectation: Tuesday before
+Sep-2025, Thursday after (the 2025-09-03 file already shows Thursday weeklies). With
+`S = [ln w_Tue(post) - ln w_Tue(pre)] - [ln w_Thu(post) - ln w_Thu(pre)]`:
+
+- **H_own**: each index's clock tracks its own exchange's expiry. `S_NIFTY < 0`, `S_SENSEX > 0`, and
+  `DiD = S_NIFTY - S_SENSEX` is strongly negative.
+- **H_market**: the suppression is market-wide and follows the dominant NSE expiry, which is what
+  the stock-futures result suggests (stocks are quieter on NSE index-expiry sessions, D-08b). Then
+  the Sensex clock is also low on NSE's expiry weekday: `S_SENSEX` close to `S_NIFTY`, DiD near 0.
+
+Both outcomes are informative and they are distinguishable: under H_market the Sensex weight on its
+*own* expiry weekday is not low. DiD inference reuses D-11 (true-date difference ranked against
+pseudo dates) with the kill condition unchanged.
+
+**Realized variance cannot do this job.** Nifty and Sensex are near-duplicate baskets (correlation
+not yet measured here, expected above 0.95), so their realized weekday variances are close to
+identical by construction. The DiD is an options-channel test only.
+
+**Result, 2026-09-12. Sensex does not replicate the Nifty pattern, and the DiD cannot be run.**
+
+Sensex forwards pass A2a on their own (median -1.22bp against listed Sensex futures, 1,108
+expiry-days), so the inputs are sound. The clock is where it fails.
+
+Sensex clock per regime, weekday-only specification, 300 bootstrap draws:
+
+| Sensex regime | own expiry | NSE expiry | own-expiry weight | NSE-expiry weight | cond |
+|---|---|---|---|---|---|
+| 2024-01-02..2024-11-12 | Fri | Thu | **1.409** [1.077, 1.693] | 0.872 [0.560, 1.235] | 9.6 |
+| 2025-02-03..2025-08-29 | Tue | Thu | 1.692 [1.170, 2.071] | 0.932 [0.595, 1.205] | 26.8 |
+| 2025-09-02..2026-09-04 | Thu | Tue | 0.946 [0.758, 1.171] | 0.926 [0.707, 1.094] | 5.3 |
+
+Half-split stability, own-expiry weight in each half of each regime:
+
+| | first half | second half |
+|---|---|---|
+| NIFTY, Thu regime | 0.675 [0.45, 0.87] | 0.484 [0.14, 0.91] |
+| NIFTY, Tue regime | 0.549 [0.12, 0.80] | 0.498 [0.06, 1.16] |
+| SENSEX, Fri regime | 1.137 [0.75, 2.27] | **1.413** [1.05, 1.77] |
+| SENSEX, Tue regime | 1.897 (cond 42.7) | 0.157 (cond 31.7) |
+| SENSEX, Thu regime | 0.842 [0.58, 1.04] | 1.001 [0.80, 1.33] |
+
+Reading, in order of confidence:
+
+1. **Nifty's low expiry weight is stable.** Point estimates 0.48 to 0.68 in all four halves, three of
+   four intervals excluding 1, direction never flips. This strengthens D-08b.
+2. **Sensex's Tuesday regime is not identified.** Both halves fail the conditioning bar and the two
+   estimates differ twelvefold. The full-window 1.692 is not a finding.
+3. **Where Sensex is identified, its expiry session is not low.** Friday 2024 is high (1.409, and
+   1.413 in the cleaner half); Thursday after Sep-2025 is flat. The NSE expiry weekday is not
+   significantly low on Sensex either. **Neither pre-registered hypothesis is supported:** H_own
+   predicted a low own-expiry weight, H_market a low NSE-expiry weight.
+4. **The DiD does not run, as pre-committed.** On three-month windows 39 of 48 Sensex fits at h = 63
+   and 57 of 73 at h = 42 are degenerate or unusable, against 13 and 27 for Nifty. At the true event
+   the Sensex fit has condition number 32.4 at h = 63, and at h = 42 its Tuesday weight collapses to
+   1e-60, which is what produced an apparent DiD p = 0.021. That number is an artefact and is not
+   reported as a result.
+
+**What this leaves.** The Nifty within-regime effect is real and stable. It does not generalise to
+the Sensex option market, and whether the Sep-2025 rule caused Nifty's shift remains untested:
+Sensex, the one control that could have tested it, is too thin to estimate on the windows the test
+needs. Candidate reasons Sensex differs (a smaller, more speculative expiry-day market; fewer
+simultaneous maturities for the D-08 identification) are hypotheses, not findings.
+
+**Note on condition numbers in the 2024 halves** (Nifty 3e10, Sensex 9e8). Three near-motionless
+Saturdays let the weekend weight run to zero, a boundary solution with a vanishing gradient. The
+weekday weights and their intervals are unaffected. The D-11 windows never carry a weekend
+parameter (too few weekend sessions), so this does not touch the permutation results.
 
 ---
 

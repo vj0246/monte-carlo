@@ -3,17 +3,18 @@
 *घड़ी - clock.*
 
 Market variance does not accumulate evenly across the days of a week. This measures the shape of
-that accumulation in NSE index options (the **variance clock**) across two SEBI rule changes that
+that accumulation in Indian index options (the **variance clock**) across two SEBI rule changes that
 moved expiry days by regulation rather than by market choice, and then prices what it costs to
 ignore it.
 
 - **Nov 2024**: one weekly index expiry per exchange. Bank Nifty, Fin Nifty and Midcap weeklies
   ceased to exist.
-- **Sep 2025**: expiry days separated. NSE moved Thursday → Tuesday.
+- **Sep 2025**: expiry days separated. Nifty moved Thursday → Tuesday; Sensex moved Tuesday →
+  Thursday on the same date.
 
 ## The result
 
-**Within each expiry regime, the expiry session is the lowest-variance session of the week.**
+**On Nifty, the expiry session is the lowest-variance session of the week, and that holds up.**
 Weekday weights from the option surface, normalised to average one, 300 bootstrap draws over dates:
 
 | Regime | Expiry weekday | Weight | 95% CI |
@@ -21,25 +22,28 @@ Weekday weights from the option surface, normalised to average one, 300 bootstra
 | Thursday, to 2025-08-28 | Thu | **0.699** | [0.483, 0.889] |
 | Tuesday, from 2025-09-02 | Tue | **0.607** | [0.298, 0.844] |
 
-Single-stock futures, bootstrapped by session (stocks on one day share the market factor, so the
-session is the independent unit): index-expiry sessions run at 0.808 [0.685, 0.949] of an ordinary
-session before the change, and 0.904 [0.730, 1.121] after it, which is not significant.
+Split each regime in half and refit: 0.675, 0.484, 0.549, 0.498. Three of four intervals exclude 1
+and the direction never flips. Single-stock futures, bootstrapped by session, agree before the
+change (0.808 [0.685, 0.949]) and not significantly after (0.904 [0.730, 1.121]).
 
-**The data cannot attribute the move to the rule.** Randomization inference (D-11) ranks the
-Thursday-to-Tuesday swap against every eligible pseudo-event date. The pre-registered test is null
-on both channels: options p = 0.12, stocks p = 0.37. Dropping numerically degenerate fits takes the
-options channel to p = 0.056, but that rule was written after seeing the null, and at the shorter
-window it excludes the true event itself. There are only about five independent pseudo windows in
-the sample, so this design cannot produce a small p-value. Plainly: **the low-variance day moved
-when the rule moved, and on this sample that is not distinguishable from calendar drift.**
+**It does not generalise to Sensex.** Where the Sensex clock is identified, its own expiry session
+is *not* low: Friday in 2024 is high (1.409 [1.077, 1.693]), Thursday after Sep-2025 is flat. The
+Sensex Tuesday regime is not identified at all; its two halves disagree twelvefold.
+
+**Whether the rule caused Nifty's shift is untested.** Randomization inference (D-11) ranks the
+Thursday-to-Tuesday swap against every eligible pseudo-event date and is null on Nifty alone (p =
+0.12). Sensex was added to difference out common shocks, but on the three-month windows the test
+needs, 39 of 48 Sensex fits are numerically degenerate. As pre-committed, the difference-in-
+differences does not run. An apparent p = 0.021 at the shorter window comes from a Sensex weight
+collapsing to 1e-60 and is not a result.
 
 **Mechanisms.** Max-pain pinning does not hold: spot diverges from the max-pain strike at roughly
 the random-walk rate. Settlement averaging has no support (0.852 vs 0.820, intervals overlap), but
-the test is too weak to reject it either.
+the test is too weak to reject it.
 
-**What it is worth, if the clock is real.** Delta-hedging a weekly straddle on the wrong clock moves
-the P&L standard deviation by 2.3% of its own size; discrete rebalancing swamps it. The cost is in
-the entry price at one session to expiry:
+**What the Nifty clock is worth.** Delta-hedging a weekly straddle on the wrong clock moves the P&L
+standard deviation by 2.3% of its own size; discrete rebalancing swamps it. The cost sits in the
+entry price at one session to expiry:
 
 | Opened | Sessions to expiry | Price error for a calendar-time trader |
 |---|---|---|
@@ -55,48 +59,49 @@ interval maps to roughly -45% to -8%.
 
 | Stage | State |
 |---|---|
-| Ingest, panel, regime scan | done |
-| Forwards, IV surface, ATM variance | done |
-| Clock estimator, bootstrap CIs | done |
+| NSE + BSE ingest, panels, regime scan | done |
+| Forwards, IV surface, ATM variance | done (Nifty, Bank Nifty, Sensex) |
+| Clock estimator, bootstrap CIs, half-split stability | done |
 | Expiry-effect mechanism tests | done |
-| Randomization inference (D-11) | run: **kill condition fires** |
+| Randomization inference (D-11), Nifty | run: **kill condition fires** |
+| Nifty-minus-Sensex DiD (D-22) | **not evaluable**: Sensex too thin |
 | Legacy 2023 reader | justified by the D-11 trigger in D-02, not built |
 | Heston robustness layer | not built |
 
-Gates A1, A2a, A2b, A3 pass. A4 fails. See [DECISIONS.md](DECISIONS.md) D-18.
+Gates A1, A2a, A2b, A3 pass (Sensex included). A4 fails. See [DECISIONS.md](DECISIONS.md) D-18.
 
 ## Run it
 
 ```bash
 uv sync
-uv run python -m src.ingest.download          # ~800 MB of NSE archives, idempotent
-uv run python -m src.ingest.regime_scan       # derive the regime timeline
+uv run python -m src.ingest.download          # NSE + BSE archives, idempotent (~880 MB)
+uv run python -m src.ingest.regime_scan       # regime timelines, Nifty and Sensex
 uv run python -m src.ingest.build_panel       # raw -> parquet panels
 uv run python -m src.iv.forward               # put-call parity forwards
 uv run python -m src.iv.invert                # Black-76 implied vol surface
 uv run python -m src.iv.smile                 # vega-weighted ATM total variance
 uv run python -m src.clock.estimate           # the clock
 uv run python -m src.analysis.expiry_effect   # mechanism tests
-uv run python -m src.analysis.permutation     # randomization inference
+uv run python -m src.analysis.permutation     # randomization inference, incl. DiD
 uv run python -m src.experiment.mispricing    # what the clock is worth
 
 uv run pytest -q                              # all tests
 uv run pytest -m acceptance                   # the gates only
 ```
 
-No credentials. All data is public NSE archives. Everything under `data/` and `results/` is
+No credentials. All data is public exchange archives. Everything under `data/` and `results/` is
 regenerated by the commands above and is not committed, except `data/reference/`.
 
 ## Layout
 
 ```
-src/ingest/     download, regime scan, panel build
+src/ingest/     download (NSE, BSE), regime scan, panel build
 src/iv/         forward, Black-76 inversion, smile fit
 src/clock/      weight estimation
 src/analysis/   mechanism tests, randomization inference
 src/sim/        time-changed GBM paths and hedging
 src/experiment/ mispricing and hedging experiments
-tests/          one test per acceptance gate
+tests/          acceptance gates and unit tests
 DECISIONS.md    every modelling choice and why
 ```
 
@@ -106,19 +111,19 @@ DECISIONS.md    every modelling choice and why
   price.** All 146 expiring NIFTY rows on one sample date share a single value. Never invert it.
 - **Settlement price is not a traded price.** For untraded strikes it is an exchange model output:
   663 of 663 disagreed with the close. Even 80 of 559 *traded* rows disagreed.
-- **Weeklies have no matching future.** NSE lists three monthly futures against ~18 option
-  expiries. The forward comes from the put-call parity *median* across strikes, because bad
-  settlements violate no-arbitrage outright and the mean swallows them.
+- **Weeklies have no matching future.** Three monthly futures against ~18 option expiries. The
+  forward comes from the put-call parity *median* across strikes; the mean swallows bad settlements.
+- **BSE never 404s a holiday.** It returns HTTP 200 with an HTML page, which looks exactly like a
+  block page. The BSE calendar is cross-checked against NSE's for that reason, and on its first run
+  the check caught an NSE download that had cached a real session as a holiday.
 - **Stock-days are not independent observations.** Resampling them as if they were gave intervals
   about four times too narrow. Bootstrap by session.
-- **The Nifty returns channel has no power.** 87 pre-regime expiry sessions with fat tails; the
-  bootstrap ratio spans [0.45, 1.14].
-- **NSE archives need a browser `User-Agent` and a `Referer` header**, or you get a block page.
+- **Sensex clock fits on short windows are mostly degenerate.** Do not read Sensex weights from
+  anything shorter than a full regime.
 
 ## Known gaps
 
-- RBI MPC announcement dates are not populated: not derivable from NSE archives, not safe to
+- RBI MPC announcement dates are not populated: not derivable from exchange archives, not safe to
   assert from memory. The macro-event dummy covers Union Budget days only.
-- v1 is NSE-only, so Sep-2025 has no control unit. BSE Sensex moved the opposite way on the same
-  date and is the one addition that could turn "moved when the rule moved" into "moved because of
-  it".
+- The causal question needs either more pseudo windows (the legacy 2023 reader), a thicker control
+  than Sensex, or intraday data.

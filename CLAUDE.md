@@ -1,9 +1,9 @@
 # CLAUDE.md - Variance Clock (Indian Index Options)
 
 ## Purpose
-Estimate the weekday/expiry-day shape of variance accumulation (the "variance clock") in NSE index
-options across the Nov-2024 and Sep-2025 SEBI expiry-regime changes, then Monte Carlo the
-delta-hedging P&L cost of assuming variance accrues uniformly in calendar time.
+Estimate the weekday/expiry-day shape of variance accumulation (the "variance clock") in NSE and
+BSE index options across the Nov-2024 and Sep-2025 SEBI expiry-regime changes, then price the cost
+of assuming variance accrues uniformly in calendar time.
 
 ## Stack
 Python 3.11+ (uv venv; system python is 3.10, do not use it). numpy, scipy, pandas, polars, pyarrow,
@@ -13,7 +13,7 @@ statsmodels, numba, pytest, matplotlib. Pydantic v2 for config. Notebooks explor
     uv sync                                   # create/refresh env
     uv run pytest -q                          # full suite
     uv run pytest -m acceptance               # the acceptance gates only (A1..A8)
-    uv run python -m src.ingest.download      # NSE archives -> data/raw/nse/ (+ MANIFEST.json)
+    uv run python -m src.ingest.download      # NSE + BSE archives -> data/raw/{nse,bse}/
     uv run python -m src.ingest.regime_scan   # -> data/reference/regime_timeline.json
     uv run python -m src.ingest.build_panel   # data/raw -> data/panel/*.parquet
     uv run python -m src.iv.forward           # parity forwards (then src.iv.invert -> IV surface)
@@ -22,7 +22,7 @@ statsmodels, numba, pytest, matplotlib. Pydantic v2 for config. Notebooks explor
     uv run python -m src.experiment.mispricing   # entry-price error + hedging experiment
 
 ## Layout
-    data/raw/nse/{fo,idx}/  immutable archives + MANIFEST.json (url, sha256) + calendar.json
+    data/raw/{nse,bse}/     immutable archives + MANIFEST.json + calendar.json (BSE cross-checked)
     data/reference/         regime_timeline.json (generated), RBI policy + Budget dates
     data/panel/             parsed parquet, partitioned by year
     src/config.py           Pydantic settings, validated at import
@@ -36,7 +36,7 @@ None. Public NSE archives, no credentials. Any future vendor key goes through sr
 NAME only: NSE_DATA_KEY. Never inline, never logged.
 
 ## Gotchas
-- NSE archives need browser `User-Agent` + `Referer: https://www.nseindia.com/`; else blocked.
+- Archives need browser UA + exchange Referer. BSE answers a non-session with HTTP 200 + HTML.
 - v1 sample starts 2024-01-02, UDiFF reader only. Legacy 2023 reader deliberately NOT built (D-02).
 - Expiry day: settle for the *expiring* series is the underlying's final settlement, not an option
   price (146/146 rows share one value). Never invert it. D-02a.
@@ -54,7 +54,7 @@ NAME only: NSE_DATA_KEY. Never inline, never logged.
 - Lot size is a staircase (50->25->25&75->75->65&75->65); two changes land in event windows. D-10.
 - Stock-days are not independent: one session shares the market factor. Bootstrap by session, never
   by stock-day; iid resampling gave CIs ~4x too narrow. D-08b.
-- v1 NSE-only; Sep-2025 moved every NSE index expiry to Tuesday, monthlies included, so Bank Nifty
-  is treated and the event has NO control unit. Interrupted time series, not diff-in-diff - never
-  label it causal. Treated/control is a property of the event, not the symbol. D-03, D-04.
-- Dates are naive IST trading dates, never localised. A date from memory is wrong until measured (D-02).
+- Sep-2025: Nifty Thu->Tue, Sensex Tue->Thu (measured). Bank Nifty moved with Nifty: treated, not
+  a control. Causal language only if the Nifty-minus-Sensex DiD passes D-11. D-03, D-04, D-22.
+- Sensex clock is thin: 39/48 three-month fits degenerate. Never read Sensex weights below a regime.
+- Dates: naive IST, never localised. Any date from memory is wrong until measured (D-02).
