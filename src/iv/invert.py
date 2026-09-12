@@ -23,7 +23,6 @@ import logging
 
 import numpy as np
 import polars as pl
-from scipy.optimize import brentq
 from scipy.stats import norm
 
 from src.config import Settings, settings
@@ -54,9 +53,10 @@ def black76_vega(sigma, fwd, strike, ttm):
 def implied_vol(price, fwd, strike, ttm, discount, is_call):
     """Vectorised Black-76 inversion. Returns NaN where no implied volatility exists.
 
-    Newton from a Brenner-Subrahmanyam start, then Brent on the stragglers. Newton alone is not
-    enough: vega collapses for short-dated away-from-the-money contracts, which is exactly the
-    corner of the surface this project lives in, and a near-zero derivative sends Newton anywhere.
+    Newton from a Brenner-Subrahmanyam start, then vectorised bisection on the stragglers. Newton
+    alone is not enough: vega collapses for short-dated away-from-the-money contracts, which is
+    exactly the corner of the surface this project lives in, and a near-zero derivative sends
+    Newton anywhere.
     """
     price = np.asarray(price, dtype=float) / np.asarray(discount, dtype=float)
     fwd, strike, ttm = (np.asarray(x, dtype=float) for x in (fwd, strike, ttm))
@@ -86,57 +86,81 @@ def implied_vol(price, fwd, strike, ttm, discount, is_call):
 
     resid = np.abs(black76_undiscounted(guess, f, k, t, c) - p)
     stuck = resid > _TOL * np.maximum(f, 1.0)
-    for i in np.flatnonzero(stuck):
-        def objective(s, i=i):
-            return float(black76_undiscounted(s, f[i], k[i], t[i], c[i]) - p[i])
-
-        try:
-            guess[i] = brentq(objective, _MIN_VOL, _MAX_VOL, xtol=1e-10)
-        except ValueError:
-            guess[i] = np.nan
+    if stuck.any():
+        guess[stuck] = _bisect(p[stuck], f[stuck], k[stuck], t[stuck], c[stuck])
 
     sigma[feasible] = guess
     return sigma
 
 
-def _session_index(cfg: Settings) -> dict[dt.date, int]:
+def _bisect(p, f, k, t, c, steps: int = 60) -> np.ndarray:
+    """Vectorised bisection on [_MIN_VOL, _MAX_VOL] for the contracts Newton could not finish.
+
+    Replaces a per-contract ``brentq`` loop. With Sensex added the loop ran long enough, on a
+    memory-starved machine, that the job was killed twice. Price is increasing in volatility, so
+    bisection is exact; 60 halvings of a width-5 bracket is far below the pricing tolerance. A
+    price the bracket cannot reach has no implied volatility and returns NaN, as ``brentq`` did.
+    """
+    lo = np.full(p.shape, _MIN_VOL)
+    hi = np.full(p.shape, _MAX_VOL)
+    reachable = (black76_undiscounted(lo, f, k, t, c) <= p) & (black76_undiscounted(hi, f, k, t, c) >= p)
+    for _ in range(steps):
+        mid = 0.5 * (lo + hi)
+        above = black76_undiscounted(mid, f, k, t, c) > p
+        hi = np.where(above, mid, hi)
+        lo = np.where(above, lo, mid)
+    return np.where(reachable, 0.5 * (lo + hi), np.nan)
+
+
+def _session_index(cfg: Settings) -> pl.DataFrame:
     cal = json.loads((cfg.raw_dir / "calendar.json").read_text(encoding="utf-8"))
-    return {dt.date.fromisoformat(d): i for i, d in enumerate(cal["trading_days"])}
+    days = [dt.date.fromisoformat(d) for d in cal["trading_days"]]
+    return pl.DataFrame(
+        {"day": days, "session": list(range(len(days)))},
+        schema={"day": pl.Date, "session": pl.Int64},
+    )
 
 
 def build_surface(cfg: Settings = settings) -> pl.DataFrame:
-    panel = pl.concat(
-        [pl.read_parquet(f) for f in sorted(cfg.panel_dir.glob("fo_*.parquet"))],
-        how="vertical_relaxed",
-    ).filter(pl.col("instr") == "IDO")
+    # Liquidity filters (D-06) first, and lazily. The panel is 2.2M contract-days across NSE and
+    # BSE and most never traded; loading all of it and mapping sessions through Python lists ran the
+    # machine out of memory once Sensex was added. The filters commute, so the output is unchanged.
+    panel = (
+        pl.concat(
+            [pl.scan_parquet(f) for f in sorted(cfg.panel_dir.glob("fo_*.parquet"))],
+            how="vertical_relaxed",
+        )
+        .filter(
+            (pl.col("instr") == "IDO")
+            & (pl.col("volume") > 0)
+            & (pl.col("n_trades") >= 5)
+            & (pl.col("open_int") >= 500)
+        )
+        .select(
+            "trade_date", "symbol", "expiry", "tenor", "dte_cal", "strike", "opt_type",
+            "settle", "volume", "n_trades", "open_int",
+        )
+        .collect()
+    )
     forwards = pl.read_parquet(cfg.tables_dir / "forwards.parquet").select(
         ["trade_date", "symbol", "expiry", "forward", "discount", "n_pairs"]
     )
-
-    df = panel.join(forwards, on=["trade_date", "symbol", "expiry"], how="inner")
-
     sessions = _session_index(cfg)
-    expiry_session = pl.Series(
-        "exp_session", [sessions.get(d) for d in df["expiry"].to_list()], dtype=pl.Int64
-    )
-    trade_session = pl.Series(
-        "trd_session", [sessions.get(d) for d in df["trade_date"].to_list()], dtype=pl.Int64
-    )
-    df = df.with_columns(expiry_session, trade_session).with_columns(
-        (pl.col("exp_session") - pl.col("trd_session")).alias("dte_trd"),
-        (pl.col("strike") / pl.col("forward")).log().alias("log_moneyness"),
-        (pl.col("dte_cal") / 365.0).alias("ttm"),
+
+    df = (
+        panel.join(forwards, on=["trade_date", "symbol", "expiry"], how="inner")
+        .join(sessions.rename({"day": "trade_date", "session": "trd_session"}), on="trade_date", how="left")
+        .join(sessions.rename({"day": "expiry", "session": "exp_session"}), on="expiry", how="left")
+        .with_columns(
+            (pl.col("exp_session") - pl.col("trd_session")).alias("dte_trd"),
+            (pl.col("strike") / pl.col("forward")).log().alias("log_moneyness"),
+            (pl.col("dte_cal") / 365.0).alias("ttm"),
+        )
     )
 
-    # D-06. dte_trd is null for expiries beyond the end of the sample; those are long-dated
-    # contracts and are excluded by the tenor filter downstream anyway.
-    kept = df.filter(
-        (pl.col("volume") > 0)
-        & (pl.col("n_trades") >= 5)
-        & (pl.col("open_int") >= 500)
-        & (pl.col("log_moneyness").abs() <= 0.15)
-        & (pl.col("dte_trd") >= 2)
-    )
+    # D-06, the parts that need the forward and the session map. dte_trd is null for expiries past
+    # the end of the sample; those are long-dated and fall out here.
+    kept = df.filter((pl.col("log_moneyness").abs() <= 0.15) & (pl.col("dte_trd") >= 2))
 
     sigma = implied_vol(
         kept["settle"].to_numpy(),

@@ -60,11 +60,16 @@ class ClockFit:
 def _expiry_days(panel_dir: str, symbol: str) -> frozenset[dt.date]:
     """Every option expiry date for ``symbol``. Cached: it scans 1.85M panel rows, and the
     permutation test (D-11) calls ``fit`` a few hundred times."""
-    panel = pl.concat(
-        [pl.read_parquet(f) for f in sorted(Path(panel_dir).glob("fo_*.parquet"))],
-        how="vertical_relaxed",
-    ).filter((pl.col("symbol") == symbol) & (pl.col("instr") == "IDO"))
-    return frozenset(panel["expiry"].unique().to_list())
+    expiries = (
+        pl.concat(
+            [pl.scan_parquet(f) for f in sorted(Path(panel_dir).glob("fo_*.parquet"))],
+            how="vertical_relaxed",
+        )
+        .filter((pl.col("symbol") == symbol) & (pl.col("instr") == "IDO"))
+        .select(pl.col("expiry").unique())
+        .collect()
+    )
+    return frozenset(expiries["expiry"].to_list())
 
 
 def _day_features(
