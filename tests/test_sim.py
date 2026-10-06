@@ -5,8 +5,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from src.experiment.heston_robustness import XI_GBM_LIMIT, sweep_cell
+from src.experiment.mispricing import ANNUAL_VOL, SESSIONS_PER_YEAR, SPOT, TUE_REGIME
 from src.iv.invert import black76_undiscounted
 from src.sim.analytic import believed_paths, ekjs_short_straddle_mean, expected_half_s2_gamma
+from src.sim.engine import hedge_short_straddle, simulate, straddle_price
 from src.sim.heston import HestonParams, call_price, simulate_qe
 
 
@@ -71,3 +74,33 @@ def test_refined_grids_preserve_total_variance() -> None:
         assert truth.sum() == pytest.approx(weights.sum())
         assert flat.sum() == pytest.approx(weights.sum())
         assert truth.size == weights.size * per_session
+
+
+def test_heston_gbm_limit_matches_the_time_changed_gbm_engine() -> None:
+    """Vol-of-vol at zero must collapse the Heston sweep onto the engine behind the headline.
+
+    This is the check that caught a real bug rather than a hypothetical one: believed remaining
+    variance had excluded the step about to happen, which inflated the clock standard deviation from
+    497 to 540 and the clock share from 2.3% to 3.5%. Both constructions are plausible on their own;
+    only the comparison exposed it.
+    """
+    order = ("Wed", "Thu", "Fri", "Mon", "Tue")
+    weights = np.array([TUE_REGIME[d] for d in order])
+    weights = weights / weights.mean()
+    n_paths, seed = 50_000, 23
+
+    cell = sweep_cell(0.0, XI_GBM_LIMIT, 1, weights, n_paths, seed)
+
+    sigma = ANNUAL_VOL / np.sqrt(SESSIONS_PER_YEAR)
+    truth, flat = believed_paths(weights, 1)
+
+    def remaining(per_step: np.ndarray) -> np.ndarray:
+        return per_step.sum() - np.concatenate([[0.0], np.cumsum(per_step)[:-1]])
+
+    entry = straddle_price(SPOT, SPOT, float(sigma**2 * weights.sum()))
+    paths = simulate(truth, sigma, SPOT, n_paths, np.random.default_rng(seed))
+    clock = hedge_short_straddle(paths, SPOT, sigma**2 * remaining(truth), entry, 0.0)
+    calendar = hedge_short_straddle(paths, SPOT, sigma**2 * remaining(flat), entry, 0.0)
+
+    assert cell["clock_sd"] == pytest.approx(clock.std(), rel=0.02)
+    assert abs(cell["share_of_sd"] - (calendar - clock).std() / clock.std()) < 0.004

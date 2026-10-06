@@ -137,9 +137,10 @@ def hedge(
     return cash - np.abs(paths[:, -1] - strike)
 
 
-def _cell(
+def sweep_cell(
     rho: float, xi: float, per_session: int, weights: np.ndarray, n_paths: int, seed: int
 ) -> dict:
+    """One grid cell. Public because the vol-of-vol-to-zero case is a test (tests/test_sim.py)."""
     p = HestonParams(v0=THETA, kappa=KAPPA, theta=THETA, xi=xi, rho=rho)
     # Rate multipliers, not variance amounts: each session's weight applies to every sub-step.
     step_weights = np.repeat(weights, per_session)
@@ -176,10 +177,10 @@ def run(cfg: Settings = settings, n_paths: int = N_PATHS, seed: int = SEED) -> p
     rows = []
     for per_session in REBALANCES_PER_SESSION:
         # Reference row: vol-of-vol at zero must reproduce the time-changed GBM headline.
-        rows.append(_cell(0.0, XI_GBM_LIMIT, per_session, weights, n_paths, seed))
+        rows.append(sweep_cell(0.0, XI_GBM_LIMIT, per_session, weights, n_paths, seed))
         for rho in RHOS:
             for xi in XIS:
-                rows.append(_cell(rho, xi, per_session, weights, n_paths, seed))
+                rows.append(sweep_cell(rho, xi, per_session, weights, n_paths, seed))
     return pl.DataFrame(rows)
 
 
