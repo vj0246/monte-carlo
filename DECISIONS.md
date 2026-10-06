@@ -741,6 +741,24 @@ are labelled as such. Under D-23 the mean was already shown to vanish in the con
 
 ---
 
+## D-25 · v1 close-out: defaults confirmed - SET
+
+The four decisions in TO_DO.md section 2 were left to their stated defaults. Recorded here so they
+are choices and not silence.
+
+- **Legacy 2023 reader: not built.** It adds ~250 sessions and takes independent pseudo-windows from
+  about 5 to 7. That is unlikely to move the D-11 null, and D-02 stands as written.
+- **Deliverable stays parquet only** (D-21). No write-up. Figures remain optional work.
+- **Researcher-chosen numbers kept:** D-06 liquidity floors (volume > 0, 5 trades, 500 open interest,
+  15% moneyness), the A5 allowance (0.3% of price), D-11 windows (63 and 42 sessions). Each carries a
+  sensitivity panel or a documented measurement.
+- **Push** to `claude/task-lfj1dg` only. No pull request opened.
+
+Still open and not closable from this environment: RBI MPC dates (needs a sourced list), the
+clean-clone reproducibility run (A8, needs the ~880 MB archives), and the intraday-data budget call.
+
+---
+
 ## Open
 
 - **RBI MPC dates** (D-07). Not derivable from NSE archives, not assertable from memory. Needed
