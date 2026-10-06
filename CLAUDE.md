@@ -19,7 +19,7 @@ statsmodels, numba, pytest, matplotlib. Pydantic v2 for config. Notebooks explor
     uv run python -m src.iv.forward           # parity forwards (then src.iv.invert -> IV surface)
     uv run python -m src.clock.estimate          # weekday weights + bootstrap CIs
     uv run python -m src.analysis.expiry_effect  # mechanism tests; .permutation for D-11
-    uv run python -m src.experiment.mispricing   # entry-price error + hedging experiment
+    uv run python -m src.experiment.mispricing   # entry-price error; .sensitivity for the A7 surface
 
 ## Layout
     data/raw/{nse,bse}/     immutable archives + MANIFEST.json + calendar.json (BSE cross-checked)

@@ -65,10 +65,15 @@ interval maps to roughly -45% to -8%.
 | Expiry-effect mechanism tests | done |
 | Randomization inference (D-11), Nifty | run: **kill condition fires** |
 | Nifty-minus-Sensex DiD (D-22) | **not evaluable**: Sensex too thin |
+| Simulation layer: Heston QE, Fourier prices, EKJS benchmark | done, A5 and A6 pass |
+| Sensitivity surface over rebalance frequency and cost | done, A7 passes (16 cells) |
+| Run provenance and seeded determinism | done, A8 partial (clean-clone run is manual) |
 | Legacy 2023 reader | justified by the D-11 trigger in D-02, not built |
-| Heston robustness layer | not built |
+| Heston robustness sweep over (rho, xi) | not built |
 
-Gates A1, A2a, A2b, A3 pass (Sensex included). A4 fails. See [DECISIONS.md](DECISIONS.md) D-18.
+Gates A1, A2a, A2b, A3, A5, A6, A7 pass. A4 ran and reports a null (D-11). A8 is partial: the
+automated checks pass and the clean-clone run is a manual step. 22 tests pass. See
+[DECISIONS.md](DECISIONS.md) D-18 for the gates and [TO_DO.md](TO_DO.md) for what is left.
 
 ## Run it
 
@@ -84,6 +89,7 @@ uv run python -m src.clock.estimate           # the clock
 uv run python -m src.analysis.expiry_effect   # mechanism tests
 uv run python -m src.analysis.permutation     # randomization inference, incl. DiD
 uv run python -m src.experiment.mispricing    # what the clock is worth
+uv run python -m src.experiment.sensitivity   # A7 surface, with a provenance manifest
 
 uv run pytest -q                              # all tests
 uv run pytest -m acceptance                   # the gates only
@@ -99,7 +105,7 @@ src/ingest/     download (NSE, BSE), regime scan, panel build
 src/iv/         forward, Black-76 inversion, smile fit
 src/clock/      weight estimation
 src/analysis/   mechanism tests, randomization inference
-src/sim/        time-changed GBM paths and hedging
+src/sim/        time-changed GBM paths, Heston QE and Fourier, the EKJS benchmark
 src/experiment/ mispricing and hedging experiments
 tests/          acceptance gates and unit tests
 DECISIONS.md    every modelling choice and why

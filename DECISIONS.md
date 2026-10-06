@@ -500,10 +500,10 @@ with expiry-day pinning, so it is a project of its own.
 | A2b | Per-strike forward dispersion within an expiry | median MAD > 8 pts weekly | **pass** (3.93) |
 | A3 | Clock design condition number and VIFs | ill-conditioned | **pass** (10.8 / 4.4 per regime) |
 | A4 | Randomization-inference p-value for Sep-2025 | true event inside middle 90% → report null | **fails**: kill condition fires, D-11 |
-| A5 | Heston MC vs semi-analytic Fourier, 20 parameter sets | any outside 3 MC standard errors | not built |
-| A6 | Costs=0, dt→0: correct-clock mean → 0, wrong-clock mean → the EKJS integral | either limit missed | not built |
-| A7 | Headline is a surface over (rebalance frequency × cost) | a single figure is published | not built |
-| A8 | Clean-environment run reproduces committed results from pinned seeds and config hash | any figure differs | not built |
+| A5 | Heston MC vs the semi-analytic Fourier price, 20 random parameter sets, fixed seeds | any set outside 3 standard errors plus the D-23 allowance | **pass** |
+| A6 | Hedging simulator vs the EKJS closed form on each grid; correct-clock mean zero | either check missed | **pass**; original wording corrected in D-23 |
+| A7 | Headline published as a surface over rebalance frequency and cost, with provenance | a single figure is published instead | **pass** (16 cells, clock share 2.1 to 2.3%) |
+| A8 | Provenance complete, config hash stable, seeded runs bit-for-bit reproducible | a manifest is missing or a seeded run differs | **partial**: automated part passes, the clean-clone run is manual (TO_DO.md) |
 
 **A1 was rewritten.** The original reconciled against exchange-published per-expiry OI totals. NSE
 publishes no such total in the daily archive, so the gate was unrunnable. The replacement compares
@@ -513,7 +513,7 @@ fail it on thousands of rows, not hundreds. All 355 mismatches fall on two dates
 
 **A6 corrects the original plan**, which required mean hedging error → 0. True for the correct-clock
 trader, **wrong** for the wrong-clock trader, whose mean converges to the non-zero EKJS value.
-Requiring zero would force the engine to be broken to pass.
+Requiring zero would force the engine to be broken to pass. **Corrected again in D-23:** measured, the wrong-clock mean also goes to zero as rebalancing refines, because equal entry prices make the difference a martingale. The gate now compares the simulator with the closed form on each grid.
 
 ## D-19 · Reproducibility - SET
 
@@ -646,6 +646,54 @@ simultaneous maturities for the D-08 identification) are hypotheses, not finding
 Saturdays let the weekend weight run to zero, a boundary solution with a vanishing gradient. The
 weekday weights and their intervals are unaffected. The D-11 windows never carry a weekend
 parameter (too few weekend sessions), so this does not touch the permutation results.
+
+---
+
+## D-23 · Simulation layer, and two gate corrections - SET
+
+Built 2026-10-06 to close A5 to A8.
+
+**Heston pricing.** Lewis (2001) representation, Gauss-Legendre on [0, 400] with 512 nodes, and the
+Albrecher "little trap" branch for `g` so the complex logarithm stays on the principal branch at long
+maturities. A characteristic function is easy to get wrong in a way that still returns a plausible
+number, so two independent checks guard it: the price must collapse to Black-76 as vol-of-vol goes to
+zero with `v0 == theta`, and the QE simulator must match it at finite vol-of-vol. The first is
+deliberately loose (relative 2e-3): the `kappa*theta/xi^2` prefactor makes that limit
+ill-conditioned, which is the price of having a limit with a known answer at all.
+
+**Simulation.** Andersen QE for the variance (Euler is biased near zero, D-12), central
+discretisation for log-spot with the drift written as
+`(rho/xi) dv - (rho kappa theta/xi) dt + (rho kappa/xi - 1/2) v dt + sqrt(1-rho^2) sqrt(v) dW`.
+Antithetic pairs are built from mirrored seeds rather than negated normals, because the QE variance
+step consumes a uniform as well as a normal and negating only the normals is not a valid pair.
+
+**A5 tolerance.** `3 standard errors + 0.3% of price`. Measured over three parameter sets at 64, 256
+and 1024 steps, the deviation oscillates inside +/-0.4% and +/-1.75 standard errors with no drift
+with step count, so it is sampling noise rather than discretisation bias. The allowance absorbs that
+without hiding a wrong characteristic function, which would be wrong by percent. Seeds are fixed, so
+a failure is a regression and not an unlucky draw.
+
+**A6 is corrected.** D-18 said the wrong-clock mean converges to the non-zero EKJS integral. It does
+not. Both traders are forced to the same entry price, so their P&L difference is
+`integral (Delta_realised - Delta_believed) dS`, a martingale, and **its mean goes to zero as
+rebalancing refines**. The benchmark shrinks with the grid: -0.699, -0.174, -0.043, -0.011 at 1, 4,
+16 and 64 hedges per session, and the simulator tracks it at every grid (z = +1.75, -1.11, -0.12,
+-0.30). This is the same category of error as the original "mean converges to zero", which D-18
+already corrected once in the other direction.
+
+The gate is therefore: the simulator equals the closed form on whatever grid it runs, and a
+correct-clock hedger has mean zero. **This strengthens D-16 rather than weakening it.** If the mean
+effect vanishes in the limit, the mean was never the interesting quantity, and the distribution,
+which has no closed form once rebalancing is discrete and costs are paid, is the only place the clock
+can show up. Measured dispersion stays near 2% of a correct-clock hedger's P&L standard deviation
+across the whole A7 grid.
+
+**A8 scope.** A clean-machine end-to-end reproduction cannot be checked from inside the process. The
+automated gate covers what can be: every published table carries a `.manifest.json` with git commit,
+config hash, seed, interpreter and library versions and input digests; the config hash is stable; a
+stored manifest must match the current config; and a seeded simulation is bit-for-bit reproducible.
+The clean-clone run remains a manual step and is listed in TO_DO.md. Calling that gate "passed"
+without the manual step would be a false claim, so the status reads partial.
 
 ---
 
