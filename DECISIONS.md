@@ -697,6 +697,50 @@ without the manual step would be a false claim, so the status reads partial.
 
 ---
 
+## D-24 · Heston robustness sweep - SET
+
+D-12 planned Heston as a robustness layer over a swept `(rho, xi)` grid rather than the headline
+generator, because neither parameter is estimated anywhere in this project. The honest form of the
+question is therefore not "what is the number under Heston" but "does the number move when the two
+unestimated parameters do".
+
+**Construction.** Time-changed Heston: the clock scales the variance the spot sees, never the grid
+spacing (D-13).
+
+    dX = -0.5 w(t) v dt + sqrt(w(t) v) dW1,  dv = kappa (theta - v) dt + xi sqrt(v) dW2,  corr = rho
+
+Splitting `dW1` on `dW2` and substituting `sqrt(v) dW2 = (dv - kappa(theta - v) dt)/xi` gives the
+discretisation actually used, with the variance stepped by QE:
+
+    dx = -0.5 w vbar dt + (rho sqrt(w)/xi)(dv - kappa(theta - vbar) dt) + sqrt((1-rho^2) w vbar dt) Zperp
+
+As `xi` goes to zero the variance becomes deterministic at `theta`, the middle term vanishes, and
+this collapses exactly to the time-changed GBM of D-12. That is a hard cross-check rather than an
+approximate one, and it is a unit test.
+
+**`v0 = theta`, deliberately.** Then every session has expected variance `theta`, so a mean-one clock
+and a flat clock give identical total expected variance and both traders enter at the same price by
+construction (D-15). Any other `v0` would smuggle a level difference into a shape experiment.
+
+**Beliefs.** Both traders observe `v` and know the parameters; they differ only in the clock. Each
+hedges on its own expected remaining variance, which Heston gives in closed form:
+
+    E[ integral w v ds | v_t ] = sum_{k>i} w_k [ theta dt + (v_t - theta)(e^{-kappa(t_k - t_i)} - e^{-kappa(t_{k+1} - t_i)})/kappa ]
+
+so the hedge ratio is path-dependent through `v_t`, which is the point of the exercise.
+
+**Grid.** `rho` in {0, -0.3, -0.6, -0.9}, `xi` in {0.2, 0.5, 0.8}, `kappa` fixed at 2.0, `theta` set
+to a 13% annual volatility to match the A7 baseline, at 1 and 4 hedges per session. Feller
+(`2 kappa theta >= xi^2`) fails for the upper two `xi` values; QE is built for exactly that case and
+the variance is reported, so the violation is visible rather than hidden.
+
+**What is reported.** Dispersion, not means. The entry price is taken from the Fourier Heston price
+ignoring the time change, which is an approximation; it shifts both traders by the same constant and
+so cannot affect any standard deviation or the share. Means are therefore not interpretable here and
+are labelled as such. Under D-23 the mean was already shown to vanish in the continuous limit.
+
+---
+
 ## Open
 
 - **RBI MPC dates** (D-07). Not derivable from NSE archives, not assertable from memory. Needed
