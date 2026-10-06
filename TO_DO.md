@@ -70,7 +70,7 @@ permanent rather than pending.
 | # | Decision | Default if you say nothing |
 |---|---|---|
 | 2.1 | Build the legacy 2023 reader? D-02 pre-committed to it if D-11 came out thin, and it did. It buys ~250 sessions and takes independent pseudo-windows from about 5 to 7, which probably will not change the null. | Not built |
-| 2.2 | Push to a remote? There is no git remote. If you want this on GitHub, create an empty repo and give me the URL. Five commits are ready. | Stays local |
+| 2.2 | Push to GitHub. `gh` is not authenticated on this machine, so run `! gh auth login` in the session (or create an empty repo and give me the URL) and I will push. Eight commits are ready; only source, tests, docs and the three reference JSON files are tracked, 659 KB. | Stays local |
 | 2.3 | Keep results as parquet only (D-21), or add a short write-up and figures? You said project folder only, before the gates existed. Worth reconfirming now. | Parquet only |
 | 2.4 | Sign off on the researcher-chosen numbers, or change them: D-06 liquidity floors (volume > 0, 5 trades, 500 open interest, 15% moneyness), the A5 allowance (0.3% of price), and the D-11 window lengths (63 and 42 sessions). Each already carries a sensitivity panel or a documented measurement. | Keep as is |
 
@@ -80,17 +80,13 @@ permanent rather than pending.
 
 Ordered by value for effort. Say the word on any of them.
 
-1. **Heston robustness sweep (half a day).** D-12 planned the clock conclusion to be re-tested under
-   stochastic volatility. The engine now exists and is validated against Fourier prices (A5), so this
-   is a sweep over `(rho, xi)` and a table. It answers "does the 2% hedging number survive leverage
-   and vol-of-vol?" and it is the last unbuilt piece of the original plan.
-2. **BANKEX as a second BSE unit (half a day).** Already in the downloaded BSE files. Gives a
+1. **BANKEX as a second BSE unit (half a day).** Already in the downloaded BSE files. Gives a
    lower-dose treated unit on the BSE side, the mirror of Bank Nifty on NSE.
-3. **Bank Nifty dose-response at Nov-2024 (half a day).** D-04 noted the treated/control roles swap
+2. **Bank Nifty dose-response at Nov-2024 (half a day).** D-04 noted the treated/control roles swap
    at that event and the code supports it, but the estimate was never run.
-4. **Securities transaction tax on exercise (a day).** D-17 excluded it. It is large in Indian index
+3. **Securities transaction tax on exercise (a day).** D-17 excluded it. It is large in Indian index
    options and interacts with expiry-day pinning, so it plausibly changes the entry-price number.
-5. **Figures (two hours).** Everything is parquet right now. Weekday weights with intervals, the
+4. **Figures (two hours).** Everything is parquet right now. Weekday weights with intervals, the
    sensitivity surface, the permutation distribution.
 
 ---
@@ -100,7 +96,13 @@ Ordered by value for effort. Say the word on any of them.
 Gates: A1 open-interest chain (99.980% over 1.8M transitions), A2a forward vs listed futures
 (+1.51 bp Nifty, -1.22 bp Sensex), A2b per-strike dispersion, A3 conditioning, A5 Heston MC vs
 Fourier over 20 parameter sets, A6 hedging vs the EKJS closed form, A7 the 16-cell sensitivity
-surface. A4 ran and reports a null, which is a result and not a gap. 22 tests pass.
+surface. A4 ran and reports a null, which is a result and not a gap. 23 tests pass.
+
+The Heston robustness sweep is also done (D-24): swept over correlation and vol-of-vol, the clock
+share of hedging-error standard deviation stays at 2.13 to 2.37% across all twelve cells, against 2.1
+to 2.3% under constant volatility. Rebalance frequency moves it more than either Heston parameter, so
+the headline does not rest on assuming constant volatility. Its vol-of-vol-to-zero reference row is a
+permanent test: it caught a bug that had inflated the share to 3.5%.
 
 Findings, in one line each. Nifty expiry sessions carry significantly less variance and that is
 stable across half-samples. Sensex does not replicate it. Whether the Sep-2025 rule caused Nifty's

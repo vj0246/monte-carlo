@@ -55,6 +55,10 @@ entry price at one session to expiry:
 Over a full week the weekday mix averages out. The -21.8% uses the point weight; the Tuesday
 interval maps to roughly -45% to -8%.
 
+Swept over Heston correlation and vol-of-vol, the hedging share stays at 2.13 to 2.37% across all
+twelve cells, so it does not rest on assuming constant volatility. Rebalance frequency moves it more
+than either Heston parameter.
+
 ## Status
 
 | Stage | State |
@@ -69,7 +73,7 @@ interval maps to roughly -45% to -8%.
 | Sensitivity surface over rebalance frequency and cost | done, A7 passes (16 cells) |
 | Run provenance and seeded determinism | done, A8 partial (clean-clone run is manual) |
 | Legacy 2023 reader | justified by the D-11 trigger in D-02, not built |
-| Heston robustness sweep over (rho, xi) | not built |
+| Heston robustness sweep over (rho, xi) | done: clock share 2.13 to 2.37% across all 12 cells |
 
 Gates A1, A2a, A2b, A3, A5, A6, A7 pass. A4 ran and reports a null (D-11). A8 is partial: the
 automated checks pass and the clean-clone run is a manual step. 22 tests pass. See
@@ -90,6 +94,7 @@ uv run python -m src.analysis.expiry_effect   # mechanism tests
 uv run python -m src.analysis.permutation     # randomization inference, incl. DiD
 uv run python -m src.experiment.mispricing    # what the clock is worth
 uv run python -m src.experiment.sensitivity   # A7 surface, with a provenance manifest
+uv run python -m src.experiment.heston_robustness   # does the result survive stochastic vol
 
 uv run pytest -q                              # all tests
 uv run pytest -m acceptance                   # the gates only
