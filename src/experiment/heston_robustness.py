@@ -129,7 +129,7 @@ def hedge(
     for i in range(remaining.shape[1]):
         total_var = remaining[:, i]
         d1 = (np.log(paths[:, i] / strike) + 0.5 * total_var) / np.sqrt(total_var)
-        target = -(2.0 * norm.cdf(d1) - 1.0)
+        target = 2.0 * norm.cdf(d1) - 1.0  # long the straddle's delta: the position is short it
         trade = target - position
         cash -= trade * paths[:, i] + np.abs(trade) * paths[:, i] * cost_bp * 1e-4
         position = target

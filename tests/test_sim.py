@@ -76,13 +76,33 @@ def test_refined_grids_preserve_total_variance() -> None:
         assert truth.size == weights.size * per_session
 
 
+def test_delta_hedge_reduces_risk_at_the_discrete_hedging_rate() -> None:
+    """A hedge must hedge. Regression for D-25: with the delta sign flipped, the "hedged" P&L had a
+    standard deviation of 497 against 277 for the naked payoff, and it *grew* with rebalancing.
+
+    Correctly signed, the error falls like ``m**-0.5`` (Boyle-Emanuel; Bertsimas-Kogan-Lo):
+    measured 137.0 at one hedge per session and 70.9 at four.
+    """
+    sigma = ANNUAL_VOL / np.sqrt(SESSIONS_PER_YEAR)
+    weights = np.ones(5)
+    entry = straddle_price(SPOT, SPOT, float(sigma**2 * weights.sum()))
+    sds = []
+    for per_session in (1, 4):
+        truth, _ = believed_paths(weights, per_session)
+        per_step = sigma**2 * truth
+        remaining = per_step.sum() - np.concatenate([[0.0], np.cumsum(per_step)[:-1]])
+        paths = simulate(truth, sigma, SPOT, 40_000, np.random.default_rng(1))
+        sds.append(hedge_short_straddle(paths, SPOT, remaining, entry, 0.0).std())
+    naked = np.abs(paths[:, -1] - SPOT).std()
+    assert sds[0] < 0.6 * naked
+    assert sds[1] / sds[0] == pytest.approx(0.5, abs=0.08)
+
+
 def test_heston_gbm_limit_matches_the_time_changed_gbm_engine() -> None:
     """Vol-of-vol at zero must collapse the Heston sweep onto the engine behind the headline.
 
-    This is the check that caught a real bug rather than a hypothetical one: believed remaining
-    variance had excluded the step about to happen, which inflated the clock standard deviation from
-    497 to 540 and the clock share from 2.3% to 3.5%. Both constructions are plausible on their own;
-    only the comparison exposed it.
+    This caught a real bug: believed remaining variance had excluded the step about to happen. It
+    could not catch the D-25 sign error, because both constructions carried it; the test above does.
     """
     order = ("Wed", "Thu", "Fri", "Mon", "Tue")
     weights = np.array([TUE_REGIME[d] for d in order])

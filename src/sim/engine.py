@@ -58,6 +58,10 @@ def hedge_short_straddle(
 
     ``remaining_var[i]`` is the variance the hedger *believes* remains at the start of session
     ``i``. Two traders differ only in this vector, which is the whole experiment (D-15).
+
+    The short straddle has delta ``-straddle_delta``, so the hedge holds ``+straddle_delta`` units
+    of the underlying. Holding the negative (as an earlier version did) doubles the exposure: the
+    "hedged" P&L then had a larger standard deviation than the unhedged payoff (D-25).
     """
     n_paths, n_points = paths.shape
     n_sessions = n_points - 1
@@ -65,7 +69,7 @@ def hedge_short_straddle(
     position = np.zeros(n_paths)  # units of the underlying held as a hedge
 
     for i in range(n_sessions):
-        target = -straddle_delta(paths[:, i], strike, remaining_var[i])
+        target = straddle_delta(paths[:, i], strike, remaining_var[i])
         trade = target - position
         cash -= trade * paths[:, i]
         cash -= np.abs(trade) * paths[:, i] * cost_bp * 1e-4

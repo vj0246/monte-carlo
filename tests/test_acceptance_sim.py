@@ -14,7 +14,7 @@ import pytest
 from src.config import settings
 from src.experiment.mispricing import ANNUAL_VOL, SESSIONS_PER_YEAR, SPOT, TUE_REGIME
 from src.provenance import config_hash, manifest
-from src.sim.analytic import believed_paths, ekjs_short_straddle_mean
+from src.sim.analytic import believed_paths, ekjs_pathwise, ekjs_short_straddle_mean
 from src.sim.engine import hedge_short_straddle, simulate, straddle_price
 from src.sim.heston import HestonParams, call_price, mc_call_price
 
@@ -65,37 +65,39 @@ def test_a5_heston_mc_matches_fourier() -> None:
 
 
 def test_a6_hedging_matches_the_ekjs_benchmark() -> None:
-    """A6, corrected by D-23.
+    """A6, corrected by D-25 (supersedes the D-23 wording).
 
-    The original wording said the wrong-clock mean converges to a non-zero EKJS value. It does not:
-    both traders enter at the same price, so their P&L difference is a stochastic integral of a delta
-    difference against the spot, a martingale, and its mean goes to zero as rebalancing refines. The
-    benchmark itself shrinks with the grid (-0.699, -0.174, -0.043, -0.011 at 1, 4, 16, 64 hedges per
-    session). What is testable, and tested here, is that the simulator equals the closed form on
-    whatever grid it is run, and that a correct-clock hedger has mean zero.
+    Two claims. (1) The exact mean P&L difference is zero on every grid: the spot is a martingale and
+    both traders agree on the entry price, so the discrete EKJS sum (-0.699 at one hedge per session)
+    is the gamma proxy's bias, not the mean, and the simulator must reject it. (2) Pathwise, the
+    simulated difference converges in L2 to the EKJS integral at the rate of discrete hedging,
+    ``m**-0.5``: relative RMS error measured at 0.68, 0.32, 0.16 for 4, 16, 64 hedges per session.
     """
     sigma = ANNUAL_VOL / np.sqrt(SESSIONS_PER_YEAR)
     weights = _clock_weights()
     entry = straddle_price(SPOT, SPOT, float(sigma**2 * weights.sum()))
-    benchmarks = []
+    rel_rms = []
 
     for per_session in (1, 4, 16, 64):
         truth, flat = believed_paths(weights, per_session)
-        paths = simulate(truth, sigma, SPOT, 200_000, np.random.default_rng(5))
-        clock = hedge_short_straddle(paths, SPOT, sigma**2 * _remaining(truth), entry, 0.0)
-        calendar = hedge_short_straddle(paths, SPOT, sigma**2 * _remaining(flat), entry, 0.0)
-        expected = ekjs_short_straddle_mean(SPOT, SPOT, sigma**2 * truth, sigma**2 * flat)
-        benchmarks.append(expected)
+        realised, believed = sigma**2 * truth, sigma**2 * flat
+        paths = simulate(truth, sigma, SPOT, 100_000, np.random.default_rng(5))
+        clock = hedge_short_straddle(paths, SPOT, _remaining(realised), entry, 0.0)
+        calendar = hedge_short_straddle(paths, SPOT, _remaining(believed), entry, 0.0)
+        diff = calendar - clock
 
-        se = calendar.std() / np.sqrt(calendar.size)
-        assert abs(calendar.mean() - expected) < 3 * se, (
-            f"{per_session}/session: mc={calendar.mean():+.4f} ekjs={expected:+.4f} se={se:.4f}"
-        )
-        if per_session >= 16:
-            se_clock = clock.std() / np.sqrt(clock.size)
-            assert abs(clock.mean()) < 3 * se_clock, "correct-clock mean should vanish"
+        se = diff.std() / np.sqrt(diff.size)
+        assert abs(diff.mean()) < 3 * se, f"{per_session}/session: mean {diff.mean():+.4f} se {se:.4f}"
+        if per_session == 1:
+            proxy = ekjs_short_straddle_mean(SPOT, SPOT, realised, believed)
+            assert abs(proxy) > 10 * se, "the gamma proxy's bias must be resolvable from zero"
 
-    assert abs(benchmarks[-1]) < abs(benchmarks[0]), "benchmark must shrink as rebalancing refines"
+        error = diff - ekjs_pathwise(paths, SPOT, realised, believed)
+        rel_rms.append(float(np.sqrt(np.mean(error**2)) / diff.std()))
+
+    assert rel_rms[-1] < 0.2, rel_rms
+    for coarse, fine in zip(rel_rms[1:-1], rel_rms[2:]):
+        assert 0.35 < fine / coarse < 0.65, f"expected m**-0.5 convergence, got {rel_rms}"
 
 
 def test_a7_headline_is_a_surface_not_a_number() -> None:
