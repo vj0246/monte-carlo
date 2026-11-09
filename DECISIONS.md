@@ -290,18 +290,19 @@ rescales to mean one over the window.
 
 ## D-08c · What the clock is actually worth
 
-**The hedging experiment is close to a null on this sample.** Short an at-the-money weekly
-straddle, delta-hedge once per session, both traders forced to the same entry price (D-15).
-200,000 paths, truth following the fitted Tuesday-regime clock:
+**Corrected 2026-11-10 (D-25).** The table that stood here (clock sd 497, share 2.3%, "discrete
+rebalancing swamps the clock by a factor of forty") came from a hedge with the wrong sign. Corrected,
+200,000 paths, truth following the fitted Tuesday-regime clock, one hedge per session:
 
 | cost (bp) | clock sd | calendar sd | difference sd | share of hedging-error sd |
 |---|---|---|---|---|
-| 0.0 | 497.06 | 493.52 | 11.52 | 2.3% |
-| 0.5 | 496.91 | 493.38 | 11.52 | 2.3% |
-| 2.0 | 496.46 | 492.97 | 11.52 | 2.3% |
+| 0.0 | 136.86 | 137.30 | 11.52 | 8.4% |
+| 0.5 | 137.14 | 137.59 | 11.53 | 8.4% |
+| 2.0 | 137.99 | 138.47 | 11.54 | 8.4% |
 
-Discrete rebalancing error swamps the clock by a factor of forty, and trading cost does not change
-that. The plan made this the headline; on this sample it is not one.
+At daily hedging the clock term is nearly orthogonal to discretisation error, so the calendar
+trader's total sd is only 0.3% higher. But the clock term does not shrink with rebalancing and the
+discretisation term does: see D-25. The hedging result is a floor, not a null.
 
 **The money is in the entry price, at one session to expiry.** A calendar-time trader misprices an
 option by the ratio of the clock variance of the sessions it spans to the flat variance it assumes:
@@ -315,9 +316,9 @@ option by the ratio of the clock variance of the sessions it spans to the flat v
 | Tue | 5 | 5.000 | 5.0 | 0.0% |
 
 Over a full week the weekday mix averages to one by construction and the error vanishes. Over a
-single session it does not. **The clock is a one-day-to-expiry phenomenon and it shows up in the
-price, not the hedge.** The corresponding near/far calendar spread opened on a Monday is mispriced
-+9.5%.
+single session it does not. **In the price, the clock is a one-day-to-expiry phenomenon.** (The
+earlier "price, not the hedge" was wrong; D-25.) The corresponding near/far calendar spread opened
+on a Monday is mispriced +9.5%.
 
 Caveat: -21.8% is a point estimate on a weight whose interval is [0.298, 0.844], which maps to a
 price-error range of roughly -45% to -8%. Wide, but negative throughout.
@@ -501,8 +502,8 @@ with expiry-day pinning, so it is a project of its own.
 | A3 | Clock design condition number and VIFs | ill-conditioned | **pass** (10.8 / 4.4 per regime) |
 | A4 | Randomization-inference p-value for Sep-2025 | true event inside middle 90% → report null | **fails**: kill condition fires, D-11 |
 | A5 | Heston MC vs the semi-analytic Fourier price, 20 random parameter sets, fixed seeds | any set outside 3 standard errors plus the D-23 allowance | **pass** |
-| A6 | Hedging simulator vs the EKJS closed form on each grid; correct-clock mean zero | either check missed | **pass**; original wording corrected in D-23 |
-| A7 | Headline published as a surface over rebalance frequency and cost, with provenance | a single figure is published instead | **pass** (16 cells, clock share 2.1 to 2.3%) |
+| A6 | Exact mean zero on every grid; simulated P&L difference converges pathwise (L2) to the EKJS integral at rate m^-1/2 | either check missed | **pass**; wording corrected in D-23, again in D-25 |
+| A7 | Headline published as a surface over rebalance frequency and cost, with provenance | a single figure is published instead | **pass** (16 cells, clock share 8.4% at 1 hedge/session to 23.8% at 8) |
 | A8 | Provenance complete, config hash stable, seeded runs bit-for-bit reproducible | a manifest is missing or a seeded run differs | **partial**: automated part passes, the clean-clone run is manual (TO_DO.md) |
 
 **A1 was rewritten.** The original reconciled against exchange-published per-expiry OI totals. NSE
@@ -685,8 +686,11 @@ The gate is therefore: the simulator equals the closed form on whatever grid it 
 correct-clock hedger has mean zero. **This strengthens D-16 rather than weakening it.** If the mean
 effect vanishes in the limit, the mean was never the interesting quantity, and the distribution,
 which has no closed form once rebalancing is discrete and costs are paid, is the only place the clock
-can show up. Measured dispersion stays near 2% of a correct-clock hedger's P&L standard deviation
-across the whole A7 grid.
+can show up. ~~Measured dispersion stays near 2%~~ (wrong-sign hedge; D-25).
+
+**Superseded in part by D-25.** The simulator did not "track" the closed form: its standard error
+was inflated by the sign error, so -0.699 and 0 were indistinguishable. The exact mean is zero on
+every grid; -0.699 is the bias of the gamma proxy.
 
 **A8 scope.** A clean-machine end-to-end reproduction cannot be checked from inside the process. The
 automated gate covers what can be: every published table carries a `.manifest.json` with git commit,
@@ -738,6 +742,66 @@ the variance is reported, so the violation is visible rather than hidden.
 ignoring the time change, which is an approximation; it shifts both traders by the same constant and
 so cannot affect any standard deviation or the share. Means are therefore not interpretable here and
 are labelled as such. Under D-23 the mean was already shown to vanish in the continuous limit.
+
+**Result, corrected 2026-11-10 (D-25; the published 2.13-2.37% was the wrong-sign hedge).** The
+clock term is what is robust: difference sd 11.42 to 11.83 across all 24 stochastic-vol cells,
+against 11.56 / 11.45 in the GBM-limit rows. The share moves (7.1% to 15.8%) only because vol-of-vol
+adds unhedged vega risk to the denominator: clock-trader sd rises from 137 to 168 at one hedge per
+session and from 70 to 117 at four as `xi` goes to 0.8. So the clock's absolute cost does not depend
+on the two parameters this project never estimates.
+
+---
+
+## D-25 · The hedge had the wrong sign; the hedging result is a floor, not a null - SET
+
+Found 2026-11-10 by reading the A7 table rather than the tests: the "hedged" clock trader's P&L sd
+was 497 against 277 for the naked straddle payoff, and it *rose* with rebalancing (497, 524, 539,
+545 at 1, 2, 4, 8 hedges per session). A delta hedge must lower risk, and discrete-hedging error must
+fall like `m^-1/2` (Boyle-Emanuel 1980; Bertsimas-Kogan-Lo 2000). Cause: the short straddle has
+delta `-Delta`, so the hedge holds `+Delta`; `hedge_short_straddle` and the Heston `hedge` held
+`-Delta`, doubling the exposure. 23 tests passed because every check that touched it compared means
+(sign-blind: `E[sum delta dS] = 0` for either sign) or compared two implementations that shared it.
+
+**Corrected numbers** (Tue-regime clock, opened Wednesday, 13% vol, entry 365.26, zero cost):
+
+| hedges/session | clock sd | calendar - clock sd | share |
+|---|---|---|---|
+| 1 | 136.9 | 11.52 | 8.4% |
+| 2 | 99.0 | 11.13 | 11.2% |
+| 4 | 70.8 | 11.39 | 16.1% |
+| 8 | 50.4 | 11.72 | 23.3% |
+| 32 | 25.4 | 12.18 | 47.9% (100k paths) |
+
+`136.9 / sqrt(m)` predicts 96.8, 68.4, 48.4, 24.2: the discretisation term is textbook. The clock
+term is flat. In the continuous limit the correct-clock trader replicates exactly and the calendar
+trader is left with the pathwise EKJS integral `int 0.5 S^2 Gamma_flat (dV_flat - dV_true)`, whose
+sd is a floor near 12 index points (about 3.3% of the premium) that no rebalancing frequency removes.
+**The clock does show up in the hedge: as the one risk a faster hedger cannot diversify away.** The
+precise floor and the crossover frequency are estimated by multilevel Monte Carlo (D-27).
+
+**Under Heston the floor is invariant.** Difference sd 11.42 to 11.83 across all 24 `(rho, xi)`
+cells (D-24, corrected).
+
+**The mean, exactly.** Under zero rates the spot is a martingale, so `E[sum delta_i dS_i] = 0` for
+any adapted hedge on any grid, and both traders' entry price equals `E[payoff]` because they agree on
+total variance. The mean P&L of both traders, and of their difference, is therefore *exactly zero on
+every grid*. D-23's "the mean goes to zero as rebalancing refines" was half right: the discrete EKJS
+sum it used as a benchmark (-0.699, -0.174, -0.043, -0.011) is the Riemann-sum bias of the gamma
+proxy, not the P&L mean. Measured: difference mean +0.012 +/- 0.036 at one hedge per session, 19
+standard errors from -0.699. In continuous time the EKJS mean is exactly zero for a reason worth
+stating: expected dollar gamma under a lognormal spot is a Gaussian convolution, so it depends only
+on realised-elapsed plus believed-remaining variance, `g(V - D(t))` with `D = V_believed - V_realised`.
+The EKJS mean is `int g(V - D) dD`, an exact differential, and `D(0) = D(T) = 0`.
+
+**A6 rewritten.** (1) The difference mean is within 3 standard errors of zero on every grid, and the
+gamma-proxy bias at one hedge per session is resolved from zero by more than 10 standard errors. (2)
+Pathwise, the simulated difference converges in L2 to `ekjs_pathwise`: relative RMS error 1.41, 0.68,
+0.32, 0.16 at 1, 4, 16, 64 hedges per session (correlation 0.988 at 64), the `m^-1/2` rate of the
+hedge. A regression test now asserts a hedge lowers risk at that rate.
+
+**What this changes.** D-08c's hedging paragraph and "price, not the hedge"; the A7 numbers; D-24's
+2.13-2.37%. **What it does not change.** Every options-channel and returns-channel estimate, D-11,
+D-22, and the entry-price table: none of them touch the hedge.
 
 ---
 

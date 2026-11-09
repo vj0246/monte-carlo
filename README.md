@@ -41,9 +41,11 @@ collapsing to 1e-60 and is not a result.
 the random-walk rate. Settlement averaging has no support (0.852 vs 0.820, intervals overlap), but
 the test is too weak to reject it.
 
-**What the Nifty clock is worth.** Delta-hedging a weekly straddle on the wrong clock moves the P&L
-standard deviation by 2.3% of its own size; discrete rebalancing swamps it. The cost sits in the
-entry price at one session to expiry:
+**What the Nifty clock is worth.** Delta-hedging a weekly straddle on the wrong clock leaves a risk
+of about 11.5 index points (sd) that does not shrink with rebalancing, while discretisation error
+does: 8.4% of the correct-clock hedger's sd at one hedge per session, 23% at eight, 48% at 32. (An
+earlier version reported 2.3% from a hedge with the wrong sign; D-25.) In the price, the cost sits at
+one session to expiry:
 
 | Opened | Sessions to expiry | Price error for a calendar-time trader |
 |---|---|---|
@@ -55,9 +57,8 @@ entry price at one session to expiry:
 Over a full week the weekday mix averages out. The -21.8% uses the point weight; the Tuesday
 interval maps to roughly -45% to -8%.
 
-Swept over Heston correlation and vol-of-vol, the hedging share stays at 2.13 to 2.37% across all
-twelve cells, so it does not rest on assuming constant volatility. Rebalance frequency moves it more
-than either Heston parameter.
+Swept over Heston correlation and vol-of-vol, the clock's hedging risk stays at 11.4 to 11.8 index
+points across all 24 cells, so it does not rest on assuming constant volatility.
 
 ## Status
 
