@@ -1,11 +1,48 @@
 {
   "note": "Scheduled macro-event sessions for the D-07 event dummy. Populated ONLY where the date is verifiable. See DECISIONS.md D-07a.",
-  "generated_utc": "2026-09-08T10:09:43+00:00",
+  "generated_utc": "2026-11-09T21:51:11+00:00",
   "union_budget": [
     "2024-02-01",
     "2025-02-01",
     "2026-02-01"
   ],
-  "rbi_mpc": [],
-  "rbi_mpc_status": "NOT POPULATED. RBI monetary policy announcement dates are not derivable from NSE archives and must not be asserted from memory (D-02). Supply from RBI press releases before relying on the event dummy."
+  "rbi_mpc": [
+    "2024-02-08",
+    "2024-04-05",
+    "2024-06-07",
+    "2024-08-08",
+    "2024-10-09",
+    "2024-12-06",
+    "2025-02-07",
+    "2025-04-09",
+    "2025-06-06",
+    "2025-08-06",
+    "2025-10-01",
+    "2025-12-05",
+    "2026-02-06",
+    "2026-04-08",
+    "2026-06-05",
+    "2026-08-05",
+    "2026-10-07"
+  ],
+  "rbi_mpc_status": "POPULATED 2026-11-10 from rbi.org.in only. Index: https://www.rbi.org.in/Scripts/Annualpolicy.aspx. Each date is the 'Date:' field of the 'Resolution of the Monetary Policy Committee' press release (re-fetched and matched 17/17 on 2026-11-10). Window 2024-01-01..2026-11-10: 17 announcements, MPC meetings 47..63 numbered consecutively (46th = Dec 6-8, 2023 per minutes prid=56982, whose resolution prid=56888 names Feb 6-8, 2024 as the next meeting, so nothing off-cycle in Jan 2024; 47th = Feb 6-8, 2024 per minutes prid=57366; 53rd = Feb 5-7, 2025; 63rd = Oct 5-7, 2026), and each resolution's 'next meeting' line ends on the next date here, so no off-cycle meeting. Per FY: 2023-24 1 in window, 2024-25 6, 2025-26 6, 2026-27 4 to date (Dec 2-4, 2026 and Feb 3-5, 2027 scheduled). Six is RBI practice; RBI Act s.45ZI(1) requires at least four (quoted in schedule release prid=46626). Aug-2025 meeting moved from Aug 5-7 to Aug 4-6 (prid=60612, s.45ZI(4)); announcement 2025-08-06. All 17 are weekdays; the 16 up to 2026-08-05 are NSE trading sessions; 2026-10-07 is after the calendar window (ends 2026-09-07, last session 2026-09-04) and is unmarked by the clock until the calendar is extended.",
+  "rbi_mpc_sources": {
+    "2024-02-08": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=57275",
+    "2024-04-05": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=57637",
+    "2024-06-07": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=58050",
+    "2024-08-08": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=58447",
+    "2024-10-09": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=58850",
+    "2024-12-06": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=59244",
+    "2025-02-07": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=59692",
+    "2025-04-09": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=60176",
+    "2025-06-06": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=60604",
+    "2025-08-06": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=60957",
+    "2025-10-01": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=61332",
+    "2025-12-05": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=61749",
+    "2026-02-06": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62169",
+    "2026-04-08": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62514",
+    "2026-06-05": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62863",
+    "2026-08-05": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63287",
+    "2026-10-07": "https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63742"
+  }
 }
