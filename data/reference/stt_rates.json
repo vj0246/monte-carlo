@@ -1,0 +1,98 @@
+{
+  "note": "Securities transaction tax on index derivatives, Finance (No. 2) Act 2004 Chapter VII s.98 Table serial 4. Rates are in PER CENT, exactly as the statute writes them. Covers the sample 2024-01-01..2026-11-10. Every rate and date below is read from a primary document listed in 'sources' (downloaded 2026-11-10, sha256 prefix recorded). Nothing here is from memory. See src/experiment/stt.py.",
+  "base": {
+    "option_sale_pct": "option premium; payable by the seller (s.98 serial 4(a))",
+    "option_exercised_pct": "intrinsic price, i.e. settlement price minus strike price; payable by the purchaser (s.98 serial 4(b); memo2024 para 2)",
+    "futures_sale_pct": "price at which the futures are traded; payable by the seller (s.98 serial 4(c))",
+    "option_exercised_before_2019_09_01": "settlement price, i.e. the notional, not the intrinsic price (s.99 as it stood before the Finance (No. 2) Act 2019; memo2019). Outside the sample; used only for the cf_ columns of src/experiment/stt.py"
+  },
+  "periods": [
+    {
+      "from": "2023-04-01",
+      "to": "2024-09-30",
+      "option_sale_pct": 0.0625,
+      "option_exercised_pct": 0.125,
+      "futures_sale_pct": 0.0125,
+      "sources": ["nse_fatax_56235", "nse_fatax_63809", "memo2024", "bse_notice_20240916_61"]
+    },
+    {
+      "from": "2024-10-01",
+      "to": "2026-03-31",
+      "option_sale_pct": 0.1,
+      "option_exercised_pct": 0.125,
+      "futures_sale_pct": 0.02,
+      "sources": ["finance_no2_act_2024", "nse_fatax_63809", "nse_fatax_73524", "finance_bill_2026_notes", "bse_notice_20240916_61"]
+    },
+    {
+      "from": "2026-04-01",
+      "to": null,
+      "option_sale_pct": 0.15,
+      "option_exercised_pct": 0.15,
+      "futures_sale_pct": 0.05,
+      "sources": ["finance_act_2026", "nse_fatax_73524", "memo2026"]
+    }
+  ],
+  "open_points": [
+    "Finance Act 2026 s.159 (the STT amendment) carries no 'with effect from' date and is not listed in the s.1(2) commencement clauses; the Act received assent 2026-03-30. The Memorandum to the Finance Bill 2026 and NSE/FATAX/73524 both apply the new rates to transactions on or after 2026-04-01. The 2026-04-01 date used here is the date the exchange levied it.",
+    "No NSE STT-rate circular after NSE/FATAX/73524 (2026-03-31) was found up to 2026-11-10. This is a web search, not an exhaustive scan of the circular archive.",
+    "BSE (Sensex): the 2024-10-01 change is read from BSE notice 20240916-61 and matches NSE. The BSE notice for 2026-04-01 (20260331-7, named in secondary coverage) returned an empty page to a scripted fetch and was NOT read; the 2026 rates rest on the Finance Act 2026 and NSE/FATAX/73524. s.98 levies the tax on any recognised stock exchange, so the rates are statutory and identical across exchanges.",
+    "The settlement-price (notional) base for exercised options is read from the Memorandum to the Finance (No. 2) Bill 2019, which proposed the switch to the intrinsic price from 2019-09-01. The enacted Finance (No. 2) Act 2019 text was not read; memo2024 confirms the intrinsic base is in force during the sample."
+  ],
+  "sources": {
+    "nse_fatax_32385": {
+      "url": "https://nsearchives.nseindia.com/content/circulars/FATAX32385.pdf",
+      "sha256_16": "5776f2d28399c2b7",
+      "says": "Circular 2/2016, 2016-05-16: option sale 0.017% -> 0.05% from 2016-06-01; exercised option 0.125% payable by purchaser, no change. Context only, predates the sample."
+    },
+    "nse_fatax_56235": {
+      "url": "https://nsearchives.nseindia.com/content/circulars/FATAX56235.pdf",
+      "sha256_16": "ed11c6c149730167",
+      "says": "Circular 2/2023, 2023-04-01: Finance Act 2023 (No. 8 of 2023), assent 2023-03-31. Option sale 0.05% -> 0.0625%, futures 0.01% -> 0.0125%, from 2023-04-01. Exercised option 0.125% purchaser, no change."
+    },
+    "nse_fatax_63809": {
+      "url": "https://nsearchives.nseindia.com/content/circulars/FATAX63809.pdf",
+      "sha256_16": "e72218a4aaffccfc",
+      "says": "Circular 2/2024, 2024-09-09: Finance (No. 2) Act 2024, assent 2024-08-16. Option sale 0.0625% -> 0.1%, futures 0.0125% -> 0.02%, for transactions on or after 2024-10-01. Exercised option 0.125% purchaser, no change. Its reference list shows no STT circular between 56235 and this one."
+    },
+    "nse_fatax_73524": {
+      "url": "https://nsearchives.nseindia.com/content/circulars/FATAX73524.pdf",
+      "sha256_16": "f4cbd1f917f88dcb",
+      "says": "Circular 02/2026, 2026-03-31: Finance Act 2026, assent 2026-03-30. Option sale 0.10% -> 0.15%, exercised option 0.125% -> 0.15%, futures 0.02% -> 0.05%, for transactions on or after 2026-04-01. Its reference list shows no STT circular between 63809 and this one."
+    },
+    "finance_no2_act_2024": {
+      "url": "https://egazette.gov.in/WriteReadData/2024/256436.pdf",
+      "sha256_16": "16bf85c2bd66af15",
+      "says": "Finance (No. 2) Act 2024, Gazette 2024-08-16, s.162: in s.98 serial 4 column (3), with effect from 2024-10-01, entry (a) 0.0625 -> 0.1 per cent, entry (c) 0.0125 -> 0.02 per cent. Entry (b) untouched."
+    },
+    "memo2024": {
+      "url": "https://www.indiabudget.gov.in/budget2024-25/doc/memo.pdf",
+      "sha256_16": "e590279f98a9ec69",
+      "says": "Memorandum to the Finance (No. 2) Bill 2024, p.45 para 2: exercised option is 0.125% of the intrinsic price (i.e. the difference between the settlement price and the strike price), payable by the purchaser."
+    },
+    "finance_bill_2026_notes": {
+      "url": "https://egazette.gov.in/WriteReadData/2026/269757.pdf",
+      "sha256_16": "78da8b8fa9d83ac4",
+      "says": "Finance Bill 2026, Gazette Part II s.2 of 2026-02-01, notes on clause 143: existing rates 0.1% of option premium, 0.125% of the intrinsic price on exercise, 0.02% on futures; proposed 0.15%, 0.15%, 0.05% from 2026-04-01."
+    },
+    "finance_act_2026": {
+      "url": "https://egazette.gov.in/WriteReadData/2026/271439.pdf",
+      "sha256_16": "f01136356e61b253",
+      "says": "Finance Act 2026 (4 of 2026), Gazette 2026-03-30, s.159: s.98 serial 4 column (3), entry (a) 0.1 -> 0.15, entry (b) 0.125 -> 0.15, entry (c) 0.02 -> 0.05 per cent. Corrigenda of 2026-04-22 (egazette 2026/271980) renumber cross-references elsewhere, not s.159."
+    },
+    "memo2026": {
+      "url": "https://www.indiabudget.gov.in/doc/memo.pdf",
+      "sha256_16": "78f81425565e23b1",
+      "says": "Memorandum to the Finance Bill 2026, p.63: same three increases, effective 2026-04-01, applying to options and futures transactions entered into on or after that date."
+    },
+    "memo2019": {
+      "url": "https://www.indiabudget.gov.in/budget2019-20/doc/memo.pdf",
+      "sha256_16": "b298ef44cc1e9d99",
+      "says": "Memorandum to the Finance (No. 2) Bill 2019, p.21, 'Rationalisation of provisions relating to STT' [Clause 193]: under existing s.99 the value of an exercised option is the settlement price; proposed to be the difference between the strike price and the settlement price, with effect from 2019-09-01. Context only, predates the sample."
+    },
+    "bse_notice_20240916_61": {
+      "url": "https://www.bseindia.com/markets/MarketInfo/DispNewNoticesCirculars.aspx?page=20240916-61",
+      "sha256_16": "ee3d7e2c7b70c028",
+      "says": "BSE notice 20240916-61, 2024-09-16, per the Finance (No. 2) Act 2024: option sale 0.0625% -> 0.10%, futures 0.0125% -> 0.02%, from 2024-10-01; exercised option 0.125% purchaser, unchanged. HTML page, so the hash is of a dynamic render."
+    }
+  }
+}
