@@ -14,6 +14,7 @@ which keeps the complex logarithm on the principal branch for long maturities.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -45,16 +46,25 @@ def char_fn(u: np.ndarray, p: HestonParams, ttm: float) -> np.ndarray:
     return np.exp(c + dterm * p.v0)
 
 
-def call_price(
-    fwd: float, strike: float, ttm: float, p: HestonParams, n_nodes: int = 512, upper: float = 400.0
+def lewis_call(
+    fwd: float, strike: float, cf: Callable[[np.ndarray], np.ndarray], n_nodes: int, upper: float
 ) -> float:
-    """Lewis (2001) representation, Gauss-Legendre on [0, upper]."""
+    """Lewis (2001) representation, Gauss-Legendre on [0, upper].
+
+    ``cf`` is the characteristic function of ``ln(S_T / F)``; any model with one can be priced here.
+    """
     k = np.log(fwd / strike)
     nodes, weights = np.polynomial.legendre.leggauss(n_nodes)
     u = 0.5 * upper * (nodes + 1.0)
     wt = 0.5 * upper * weights
-    integrand = (np.exp(1j * u * k) * char_fn(u - 0.5j, p, ttm) / (u**2 + 0.25)).real
+    integrand = (np.exp(1j * u * k) * cf(u - 0.5j) / (u**2 + 0.25)).real
     return float(fwd - np.sqrt(fwd * strike) / np.pi * np.sum(wt * integrand))
+
+
+def call_price(
+    fwd: float, strike: float, ttm: float, p: HestonParams, n_nodes: int = 512, upper: float = 400.0
+) -> float:
+    return lewis_call(fwd, strike, lambda u: char_fn(u, p, ttm), n_nodes, upper)
 
 
 def straddle_price(fwd: float, strike: float, ttm: float, p: HestonParams) -> float:
