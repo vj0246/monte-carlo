@@ -27,6 +27,9 @@ A1_MAX_MISMATCH_RATE = 0.001
 #: Measured medians: +1.51bp (NIFTY), +0.40bp (BANKNIFTY).
 A2A_MAX_ABS_MEDIAN_BP = 5.0
 A2A_MAX_MAD_BP = 5.0
+#: Futures-side D-06 floor, adopted *after* Bankex failed the unfiltered gate (MAD 5.22bp). Bankex
+#: MAD at floors 1 / 5 / 10 trades: 4.38 / 3.88 / 3.47bp; NIFTY and BANKNIFTY are unaffected.
+A2A_MIN_FUTURE_TRADES = 5
 #: A2b: dispersion of the per-strike forward within one expiry, in index points. Measured medians:
 #: 3.93 (weekly), 9.00 (monthly).
 A2B_MAX_MEDIAN_MAD = {"weekly": 8.0, "monthly": 15.0}
@@ -84,7 +87,13 @@ def test_a2a_parity_forward_matches_listed_futures(
 ) -> None:
     """A2a. Out-of-sample: nothing in the parity estimator sees a futures price."""
     futures = (
-        panel.filter((pl.col("instr") == "IDF") & pl.col("settle").is_not_null())
+        # D-06 applies to the benchmark too: an untraded futures settle is an exchange computation.
+        # Post hoc (see A2A_MIN_FUTURE_TRADES): Bankex residual MAD is 8.2-8.9bp below 5 trades.
+        panel.filter(
+            (pl.col("instr") == "IDF")
+            & pl.col("settle").is_not_null()
+            & (pl.col("n_trades") >= A2A_MIN_FUTURE_TRADES)
+        )
         .select(["trade_date", "symbol", "expiry", "settle"])
         .rename({"settle": "fut_settle"})
     )

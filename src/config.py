@@ -39,8 +39,9 @@ class Settings(BaseSettings):
     # Index levels needed for the returns channel of the treated symbols (D-09).
     treated_indices: tuple[str, ...] = ("Nifty 50", "Nifty Bank")
 
-    # BSE (D-22): same UDiFF schema as NSE, served as plain CSV.
-    bse_option_symbols: tuple[str, ...] = ("SENSEX",)
+    # BSE (D-22): same UDiFF schema as NSE, served as plain CSV. BANKEX is the BSE mirror of Bank
+    # Nifty: weekly removed at Nov-2024, a lower-dose treated unit (D-04).
+    bse_option_symbols: tuple[str, ...] = ("SENSEX", "BANKEX")
     bse_referer: str = "https://www.bseindia.com/"
 
     # NSE archive access. The UA and Referer are mandatory, not defensive: without them

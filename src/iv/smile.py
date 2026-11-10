@@ -26,6 +26,7 @@ import numpy as np
 import polars as pl
 
 from src.config import Settings, settings
+from src.provenance import manifest, write_manifest
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ def main(cfg: Settings = settings) -> None:
     atm = build_atm(cfg)
     path = cfg.tables_dir / "atm_variance.parquet"
     atm.write_parquet(path)
+    write_manifest(path, manifest("ATM total variance", cfg, inputs=(cfg.tables_dir / "iv_surface.parquet",)))
     log.info("wrote %s: %d expiry-days", path, atm.height)
     log.info("dropped by correction (noise exceeded signal): %d", atm["total_var_corr"].null_count())
     buckets = atm.with_columns(

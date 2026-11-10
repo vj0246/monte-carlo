@@ -26,6 +26,7 @@ import polars as pl
 from scipy.stats import norm
 
 from src.config import Settings, settings
+from src.provenance import manifest, write_manifest
 
 log = logging.getLogger(__name__)
 
@@ -187,6 +188,8 @@ def main(cfg: Settings = settings) -> None:
     surface = build_surface(cfg)
     path = cfg.tables_dir / "iv_surface.parquet"
     surface.write_parquet(path)
+    inputs = (cfg.tables_dir / "forwards.parquet", *sorted(cfg.panel_dir.glob("fo_*.parquet")))
+    write_manifest(path, manifest("implied-vol surface", cfg, inputs=inputs))
     n_null = surface.filter(pl.col("iv").is_null() | pl.col("iv").is_nan()).height
     log.info("wrote %s: %d quotes", path, surface.height)
     log.info("no implied vol (outside no-arbitrage bounds): %d (%.3f%%)", n_null, 100 * n_null / max(surface.height, 1))

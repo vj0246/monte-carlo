@@ -153,8 +153,9 @@ def build_options_panel(cfg: Settings = settings) -> dict[int, int]:
 
 
 def build_bse_panel(cfg: Settings = settings) -> dict[int, int]:
-    """Sensex options and futures (D-22), on the NSE session sequence so both exchanges share one
-    calendar. Written as ``fo_bse_<year>.parquet``; downstream code keys on ``symbol``."""
+    """BSE index options and futures for ``bse_option_symbols`` (Sensex, Bankex; D-22), on the NSE
+    session sequence so both exchanges share one calendar. Written as ``fo_bse_<year>.parquet``,
+    which the ``fo_*.parquet`` globs downstream pick up; everything keys on ``symbol``."""
     by_year: dict[int, list[pl.DataFrame]] = defaultdict(list)
     for day in _trading_days(cfg):
         path = cfg.bse_raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv"

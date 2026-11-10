@@ -4,20 +4,24 @@ Exists so that every structurally special date is measured rather than recalled:
 changes, the expiry-weekday regime and its transition, holiday rolls, weekend sessions. D-02 forbids
 asserting any of these from memory.
 
-Two things must be computed rather than read:
+Three things must be computed rather than read:
 
 * Holiday rolls. ``XpryDt`` and ``FininstrmActlXpryDt`` are identical on every row of every file, so
   the exchange does not publish scheduled-versus-actual. A roll is an expiry whose weekday differs
   from its regime weekday.
 * The regime itself, located by change-point search, so the Sep-2025 transition comes from the data
   rather than from an assumed effective date.
+* Which listed expiry dates actually happened. Exchanges re-date live contracts when the schedule
+  changes: on 2025-08-01 every NIFTY contract listed for Thursday 2025-09-25, 2025-12-24 (Wed) and
+  2026-06-25 reappeared on the following Tuesday with the same strike count and its open interest;
+  BSE did the same to the Sensex Friday and Bankex Monday contracts on 2025-01-01. The old date
+  never expires, but it is a trading day, so a scan over listed dates counted it as an off-weekday
+  expiry. An expiry counts only if its contract is quoted on its own expiry session.
 
-Known limitation: this scan pools every listed expiry for the symbol -- weekly, monthly, quarterly
-and long-dated -- into one set, and those tenors do not share an expiry convention. Three observed
-expiries sit *later* in the week than their regime weekday (2025-09-25, 2025-12-24, 2026-06-25),
-which a holiday roll can never do, so they are flagged ``off_regime_unclassified`` rather than
-absorbed. Splitting expiries by tenor is a prerequisite for the options channel of D-08, which
-assumes the simultaneously quoted maturities share a clock; it is not done here.
+The scan pools weekly, monthly, quarterly and long-dated expiries, which is fine for the weekday
+regime but says nothing about tenor; ``build_panel`` does the tenor split. ``last_weekly_expiry``
+is the one tenor fact recorded here, because removing weeklies (Nov-2024) is an event for Bank
+Nifty and Bankex that leaves the expiry weekday unchanged.
 
 Run:  uv run python -m src.ingest.regime_scan
 """
@@ -51,10 +55,9 @@ def trading_days(cfg: Settings) -> list[dt.date]:
 
 def _read_fo(cfg: Settings, day: dt.date, symbol: str) -> pl.DataFrame:
     if symbol in cfg.bse_option_symbols:
-        path = cfg.bse_raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv"
-        if not path.exists():
-            return pl.DataFrame()
-        raw = path.read_bytes()
+        # A missing file must fail: an expiry counts only if quoted on its own session, so a
+        # skipped day would silently drop that expiry from the timeline.
+        raw = (cfg.bse_raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv").read_bytes()
     else:
         path = cfg.raw_dir / "fo" / f"fo_{day:%Y%m%d}.csv.zip"
         with zipfile.ZipFile(path) as z:
@@ -151,9 +154,20 @@ def _regime_of(expiry: dt.date, regimes: list[dict]) -> str | None:
     return None
 
 
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def _days_early(expiry: dt.date, regime_weekday: str) -> int:
+    """Calendar days from ``expiry`` forward to the next ``regime_weekday``: how far it was pulled in.
+
+    Counted across the week boundary. A Monday-regime roll lands on the previous Friday or Saturday
+    (Bankex, 2024), which a same-week weekday difference reads as +4 or +5, i.e. as *later*.
+    """
+    return (_WEEKDAYS.index(regime_weekday) - expiry.weekday()) % 7
+
+
 def scan(cfg: Settings = settings, symbol: str = "NIFTY") -> dict:
     days = trading_days(cfg)
-    day_set = set(days)
     lots: dict[dt.date, list[int]] = {}
     expiries: set[dt.date] = set()
     xpry_mismatches = 0
@@ -163,7 +177,8 @@ def scan(cfg: Settings = settings, symbol: str = "NIFTY") -> dict:
         if df.is_empty():
             continue
         lots[day] = sorted({int(float(x)) for x in df["NewBrdLotQty"] if x})
-        expiries |= {dt.date.fromisoformat(x[:10]) for x in df["FininstrmActlXpryDt"] if x}
+        if any(x and x[:10] == day.isoformat() for x in df["FininstrmActlXpryDt"]):
+            expiries.add(day)
         xpry_mismatches += df.filter(
             pl.col("XpryDt").str.slice(0, 10) != pl.col("FininstrmActlXpryDt").str.slice(0, 10)
         ).height
@@ -175,30 +190,31 @@ def scan(cfg: Settings = settings, symbol: str = "NIFTY") -> dict:
             lot_changes.append({"first_seen": day.isoformat(), "lot_sizes": lots[day]})
             prev = lots[day]
 
-    # Only expiries that are themselves trading days in the sample can be dated reliably.
-    observed = sorted(e for e in expiries if e in day_set)
+    observed = sorted(expiries)
     runs = _weekday_runs(observed)
     regimes, residual = _segments(observed)
-    _WD = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
     rolls = []
     for e in observed:
         actual, regime = e.strftime("%a"), _regime_of(e, regimes)
         if actual == regime:
             continue
-        delta = _WD[actual] - _WD[regime]
+        days_early = _days_early(e, regime)
         rolls.append(
             {
                 "expiry": e.isoformat(),
                 "weekday": actual,
                 "regime_weekday": regime,
-                "weekday_delta": delta,
-                # A holiday roll always moves expiry *earlier* in the week. An expiry later than
-                # the regime weekday is something else -- during Sep-2025 the monthly contract ran
-                # on the old Thursday schedule while weeklies had already moved to Tuesday -- and
-                # must not be silently filed as a holiday.
-                "kind": "backward_roll" if delta < 0 else "off_regime_unclassified",
+                "days_early": days_early,
+                # A holiday roll moves expiry to an earlier session, at most a weekend away (Monday
+                # to Friday is 3 days). Anything further is not filed as a holiday: it needs two
+                # stacked holidays or is not a roll at all, and the data cannot say which.
+                "kind": "backward_roll" if days_early <= 3 else "off_regime_unclassified",
             }
         )
+    month_last: dict[tuple[int, int], dt.date] = {}
+    for e in observed:
+        month_last[(e.year, e.month)] = e
+    weeklies = [e for e in observed if e != month_last[(e.year, e.month)]]
 
     closes = {d: _nifty_close(cfg, d) for d in days}
     rets: dict[dt.date, float] = {}
@@ -220,13 +236,17 @@ def scan(cfg: Settings = settings, symbol: str = "NIFTY") -> dict:
     ]
 
     return {
-        "note": "Generated by src.ingest.regime_scan. Every field is measured from data/raw/nse.",
+        "note": "Generated by src.ingest.regime_scan. Every field is measured from data/raw/"
+        + ("bse (weekend-session returns from nse)." if symbol in cfg.bse_option_symbols else "nse."),
         "generated_utc": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "symbol": symbol,
         "window": {"start": days[0].isoformat(), "end": days[-1].isoformat()},
         "xpry_vs_actual_mismatched_rows": xpry_mismatches,
         "lot_size_changes": lot_changes,
         "expiry_weekday_runs": runs,
+        # An expiry that is not its month's last observed expiry. Measured, not the rule: the last
+        # month of the sample can look weekly-free simply because it is cut short.
+        "last_weekly_expiry": weeklies[-1].isoformat() if weeklies else None,
         "expiry_regimes": regimes,
         "regime_split_residual": residual,
         "regime_split_residual_note": "equals len(holiday_rolls) by definition; not a check",
@@ -240,12 +260,13 @@ def main(cfg: Settings = settings) -> None:
     cfg.reference_dir.mkdir(parents=True, exist_ok=True)
     targets = [("NIFTY", "regime_timeline.json")]
     if (cfg.bse_raw_dir / "calendar.json").exists():
-        targets.append(("SENSEX", "regime_timeline_sensex.json"))
+        targets += [(s, f"regime_timeline_{s.lower()}.json") for s in cfg.bse_option_symbols]
     for symbol, name in targets:
         out = scan(cfg, symbol)
         (cfg.reference_dir / name).write_text(json.dumps(out, indent=2), encoding="utf-8")
         log.info("=== %s -> %s ===", symbol, name)
         log.info("lot-size changes: %s", [(c["first_seen"], c["lot_sizes"]) for c in out["lot_size_changes"]])
+        log.info("last weekly expiry: %s", out["last_weekly_expiry"])
         log.info("expiry regimes: %s", [(r["weekday"], r["start"], r["end"], r["n_expiries"]) for r in out["expiry_regimes"]])
         kinds = Counter(r["kind"] for r in out["holiday_rolls"])
         log.info("off-weekday expiries: %s", dict(kinds))

@@ -27,6 +27,7 @@ import numpy as np
 import polars as pl
 
 from src.config import Settings, settings
+from src.provenance import manifest, write_manifest
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +155,7 @@ def main(cfg: Settings = settings) -> None:
     cfg.tables_dir.mkdir(parents=True, exist_ok=True)
     path = cfg.tables_dir / "forwards.parquet"
     fwd.write_parquet(path)
+    write_manifest(path, manifest("parity forwards", cfg, inputs=tuple(sorted(cfg.panel_dir.glob("fo_*.parquet")))))
     log.info("wrote %s: %d expiry-days", path, fwd.height)
     for tenor in ("weekly", "monthly"):
         sub = fwd.filter(pl.col("tenor") == tenor)
