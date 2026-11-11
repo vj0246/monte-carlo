@@ -30,8 +30,8 @@ weekly event. Probably does not overturn the null on its own. About two days.
 `results/tables/*.manifest.json` must carry the cloned commit and the same `config_hash`.
 Attempted 2026-11-11 (script: clone, copy `data/raw`, verify, rerun, compare): the clone at
 `cb6f3cf` built its environment, all 2,000 raw archives matched their MANIFEST sha256, and
-`regime_scan` ran; the run was then killed by the OS for low memory during `build_panel`, with
-other work running. Not completed. Rerun on an otherwise idle machine (close Chrome; the surface
+`regime_scan` ran; the run was then stopped for low system memory during `build_panel`.
+Not completed. Rerun on an otherwise idle machine (close Chrome; the surface
 build needs several GB).
 
 ---
