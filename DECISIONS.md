@@ -506,7 +506,7 @@ with expiry-day pinning, so it is a project of its own.
 | A5 | Heston MC vs the semi-analytic Fourier price, 20 random parameter sets, fixed seeds | any set outside 3 standard errors plus the D-23 allowance | **pass** |
 | A6 | Exact mean zero on every grid; simulated P&L difference converges pathwise (L2) to the EKJS integral at rate m^-1/2 | either check missed | **pass**; wording corrected in D-23, again in D-25 |
 | A7 | Headline published as a surface over rebalance frequency and cost, with provenance | a single figure is published instead | **pass** (16 cells, clock share 8.4% at 1 hedge/session to 23.8% at 8) |
-| A8 | Provenance complete, config hash stable, seeded runs bit-for-bit reproducible | a manifest is missing or a seeded run differs | **partial**: automated part passes, the clean-clone run is manual (TO_DO.md) |
+| A8 | Provenance complete, config hash stable, seeded runs bit-for-bit reproducible | a manifest is missing or a seeded run differs | **partial**: automated part passes; a clean-clone run on 2026-11-11 verified all 2,000 raw sha256s and reran `regime_scan`, then was killed for low memory in `build_panel` (TO_DO.md) |
 
 **A1 was rewritten.** The original reconciled against exchange-published per-expiry OI totals. NSE
 publishes no such total in the daily archive, so the gate was unrunnable. The replacement compares
