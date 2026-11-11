@@ -6,6 +6,7 @@ Every gate here is seeded, so a failure is a real regression rather than an unlu
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -116,6 +117,9 @@ def test_a7_headline_is_a_surface_not_a_number() -> None:
 def test_a8_provenance_is_complete_and_runs_are_reproducible() -> None:
     """A8, scoped by D-23: provenance plus determinism. The clean-machine run stays manual."""
     assert config_hash() == config_hash(), "config hash must be stable within a run"
+    moved = settings.model_copy(update={"data_root": Path("/elsewhere/data"),
+                                        "results_root": Path("/elsewhere/results")})
+    assert config_hash(moved) == config_hash(), "a clone in another directory is the same config"
 
     payload = manifest("test", seed=1)
     for key in ("git_commit", "config_hash", "seed", "python", "packages"):

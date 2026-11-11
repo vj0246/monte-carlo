@@ -24,10 +24,16 @@ from src.config import Settings, settings
 TRACKED_PACKAGES = ("numpy", "scipy", "polars", "pandas", "pyarrow")
 
 
+#: Where the checkout lives, not what it computes. Hashing them made every clone in another
+#: directory report a different configuration (found by the A8 clean-clone run, D-18).
+LOCATION_FIELDS = {"data_root", "results_root"}
+
+
 def config_hash(cfg: Settings = settings) -> str:
     """Stable digest of the settings. Changing a threshold changes the hash, and therefore the
     manifest, which is how a table stops silently claiming to come from a different configuration."""
-    payload = json.dumps(cfg.model_dump(mode="json"), sort_keys=True, default=str)
+    payload = json.dumps(cfg.model_dump(mode="json", exclude=LOCATION_FIELDS), sort_keys=True,
+                         default=str)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
