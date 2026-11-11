@@ -54,18 +54,33 @@ class ClockFit:
     condition_number: float
     vif: dict[str, float]
     boot: dict[str, tuple[float, float]] = field(default_factory=dict)
+    #: The normalised weights of every bootstrap draw, for propagating clock uncertainty downstream.
+    boot_draws: list[dict[str, float]] = field(default_factory=list)
+    #: One row per observation: quote date, expiry, sessions in (t, T], and the demeaned observed
+    #: and fitted log total variance. What the fit actually had to explain.
+    observations: pl.DataFrame | None = None
 
 
 @functools.lru_cache(maxsize=8)
 def _expiry_days(panel_dir: str, symbol: str) -> frozenset[dt.date]:
-    """Every option expiry date for ``symbol``. Cached: it scans 1.85M panel rows, and the
-    permutation test (D-11) calls ``fit`` a few hundred times."""
+    """Every session on which a ``symbol`` option series actually expired. Cached: it scans 1.85M
+    panel rows, and the permutation test (D-11) calls ``fit`` a few hundred times.
+
+    A listed expiry date is not enough. When the schedule changes the exchange re-dates live
+    contracts (NIFTY 2025-09-25 reappeared on Tuesday 2025-09-30), and the old date, still a trading
+    day, would be marked as an expiry session it never was. Same rule as ``regime_scan``: an expiry
+    counts only if its series is quoted on that session.
+    """
     expiries = (
         pl.concat(
             [pl.scan_parquet(f) for f in sorted(Path(panel_dir).glob("fo_*.parquet"))],
             how="vertical_relaxed",
         )
-        .filter((pl.col("symbol") == symbol) & (pl.col("instr") == "IDO"))
+        .filter(
+            (pl.col("symbol") == symbol)
+            & (pl.col("instr") == "IDO")
+            & (pl.col("trade_date") == pl.col("expiry"))
+        )
         .select(pl.col("expiry").unique())
         .collect()
     )
@@ -107,8 +122,9 @@ def _day_features(
 
 def _observations(
     cfg: Settings, symbol: str, sessions: list[dt.date], variance_col: str, window: tuple[dt.date, dt.date] | None
-) -> tuple[np.ndarray, sparse.csr_matrix, np.ndarray]:
-    """Return log total variance, the (obs x session) window indicator, and a group id per obs."""
+) -> tuple[np.ndarray, sparse.csr_matrix, np.ndarray, list[tuple[dt.date, dt.date]]]:
+    """Return log total variance, the (obs x session) window indicator, a group id per obs, and
+    the (trade date, expiry) of each obs."""
     idx = {d: i for i, d in enumerate(sessions)}
     atm = pl.read_parquet(cfg.tables_dir / "atm_variance.parquet").filter(
         (pl.col("symbol") == symbol)
@@ -124,7 +140,7 @@ def _observations(
             (pl.col("trade_date") >= window[0]) & (pl.col("expiry") <= window[1])
         )
 
-    rows, cols, y, groups = [], [], [], []
+    rows, cols, y, groups, keys = [], [], [], [], []
     group_ids: dict[dt.date, int] = {}
     for r, rec in enumerate(atm.iter_rows(named=True)):
         t, T = rec["trade_date"], rec["expiry"]
@@ -136,11 +152,12 @@ def _observations(
         cols.extend(span)
         y.append(np.log(rec[variance_col]))
         groups.append(group_ids.setdefault(t, len(group_ids)))
+        keys.append((t, T))
 
     window_matrix = sparse.csr_matrix(
         (np.ones(len(rows)), (rows, cols)), shape=(len(y), len(sessions))
     )
-    return np.asarray(y), window_matrix, np.asarray(groups)
+    return np.asarray(y), window_matrix, np.asarray(groups), keys
 
 
 def _demean(values: np.ndarray, groups: np.ndarray, n_groups: int) -> np.ndarray:
@@ -192,7 +209,7 @@ def fit(
     """
     param_names = tuple(n for n in PARAM_NAMES if n in WEEKDAYS or n in dummies)
     sessions, full_design = _day_features(cfg, symbol, param_names)
-    y, window_matrix, groups = _observations(cfg, symbol, sessions, variance_col, window)
+    y, window_matrix, groups, keys = _observations(cfg, symbol, sessions, variance_col, window)
     n_groups = int(groups.max()) + 1 if len(groups) else 0
     if len(y) < 50:
         raise ValueError(f"{symbol}: only {len(y)} observations; refusing to fit")
@@ -230,6 +247,18 @@ def fit(
         ]
         return -np.column_stack(cols)
 
+    # The session-level rank check above cannot see the demeaning. A date quoting one maturity is
+    # its own group and demeans to zero, so a window of such dates (BANKEX: 507 quotes on 506 dates
+    # over the whole sample) has a full-rank session design and nothing to fit. Least squares then
+    # leaves theta at its start, and the bootstrap reports that start as a zero-width interval.
+    residual_dof = len(y) - n_groups - design.shape[1]
+    start_rank = np.linalg.matrix_rank(jacobian(np.zeros(design.shape[1])))
+    if residual_dof <= 0 or start_rank < design.shape[1]:
+        raise ValueError(
+            f"{symbol}: demeaned design has rank {start_rank} for {design.shape[1]} parameters "
+            f"and {residual_dof} residual degrees of freedom; refusing to fit"
+        )
+
     result = least_squares(residual, np.zeros(design.shape[1]), jac=jacobian, method="lm")
     theta = result.x
 
@@ -254,6 +283,7 @@ def fit(
     }
 
     boot: dict[str, tuple[float, float]] = {}
+    normed: list[dict[str, float]] = []
     if n_boot:
         rng = np.random.default_rng(seed)
         draws = []
@@ -296,6 +326,16 @@ def fit(
         condition_number=condition,
         vif=vif,
         boot=boot,
+        boot_draws=normed,
+        observations=pl.DataFrame(
+            {
+                "trade_date": [t for t, _ in keys],
+                "expiry": [T for _, T in keys],
+                "sessions": np.asarray(window_matrix.sum(axis=1)).ravel().astype(int),
+                "observed": y_dm,
+                "fitted": y_dm - result.fun,
+            }
+        ),
     )
 
 
