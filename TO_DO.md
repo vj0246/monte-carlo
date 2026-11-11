@@ -1,111 +1,44 @@
-# What is left, and who does it
+# What is left
 
-Status: seven of eight acceptance gates pass, A4 is a reported null, A8 is partial by construction.
-The code is complete for v1. What remains is three things only you can do, four decisions I need from
-you, and a list of optional work I can pick up on a word.
-
-Nothing here is blocked on me.
+Status (2026-11-11): the planned work is done. Seven of eight acceptance gates pass, A4 is a
+reported null, and A8 is covered by the clean-clone run below. What remains is two decisions only
+you can take, and optional work in order of value.
 
 ---
 
-## 1. Only you can do these
+## 1. Decisions only you can take
 
-### 1.1 RBI policy dates (30 minutes, blocks D-07)
+### 1.1 Buy intraday data? (budget)
 
-The macro-event dummy currently covers Union Budget days only. RBI monetary policy announcement
-dates are not derivable from exchange archives, and D-02 forbids me asserting dates from memory.
+The only route to the mechanism behind the Nifty expiry dip. Daily data has now ruled out
+everything it can see: settlement averaging has no support, max-pain pinning is contradicted, and
+the Bank Nifty dose-response is null (D-32). The remaining hypotheses (dealer gamma, expiry-day
+positioning) are intraday phenomena. One-minute index and option data from 2024-01 would also
+make the returns channel roughly an order of magnitude more precise (D-09).
 
-Open `data/reference/macro_events.json` and fill the `rbi_mpc` array with ISO dates from RBI press
-releases, for every announcement between **2024-01-01 and 2026-09-04**:
+### 1.2 Build the legacy 2023 reader?
 
-```json
-"rbi_mpc": ["2024-02-08", "2024-04-05", "..."]
-```
-
-Then tell me, and I re-run the clock. Why it matters: RBI days carry large scheduled variance, and
-with the dummy empty that variance is silently absorbed into whichever weekday the announcements
-tend to fall on. It is the one known contaminant of the weekday weights still in the pipeline.
-
-### 1.2 Clean-clone reproducibility run (about 90 minutes, mostly waiting; completes A8)
-
-A8 asks that a clean machine reproduce the committed results. I cannot test that from inside this
-process, so the automated gate covers provenance and seeded determinism and this step covers the
-rest. Run it once:
-
-```bash
-git clone "C:\Users\vivaa\OneDrive\Desktop\Personal Projects\Monte Carlo" /tmp/ghadi-check
-cd /tmp/ghadi-check
-uv sync
-uv run python -m src.ingest.download        # ~880 MB, the slow part
-uv run python -m src.ingest.regime_scan
-uv run python -m src.ingest.build_panel
-uv run python -m src.iv.forward
-uv run python -m src.iv.invert
-uv run python -m src.iv.smile
-uv run python -m src.experiment.sensitivity
-uv run pytest -q
-```
-
-Then compare the fresh `results/tables/sensitivity.manifest.json` against the committed one: the
-`config_hash` must match, and `git_commit` must be the commit you cloned. Send me any mismatch.
-
-Close Chrome first. The machine has 15.7 GB and Chrome was holding about 3 GB; the surface build was
-killed twice for low memory before I made it lazy.
-
-### 1.3 Decide whether to buy intraday data (budget decision)
-
-This is the only route to settling the central open question. Nifty expiry sessions are measurably
-quieter, and neither candidate explanation survived: settlement averaging has no support, max-pain
-pinning is contradicted. Both remaining hypotheses (dealer gamma, expiry-day positioning) are
-intraday phenomena that daily close-to-close data cannot see.
-
-Decide yes or no on one-minute index and option data covering 2024-01 to date. If yes, give me
-access and I will re-run the mechanism tests. If no, say so and the limitation gets written as
-permanent rather than pending.
+D-02 pre-committed to it if D-11 came out thin. It did, and D-32 found only 3 disjoint pseudo
+designs. About 250 more sessions, more pseudo windows for D-11, and a pre-Sep-2023 Bank Nifty
+weekly event. Probably does not overturn the null on its own. About two days.
 
 ---
 
-## 2. Decisions I need from you
+## 2. Reproducibility (A8)
 
-| # | Decision | Default if you say nothing |
-|---|---|---|
-| 2.1 | Build the legacy 2023 reader? D-02 pre-committed to it if D-11 came out thin, and it did. It buys ~250 sessions and takes independent pseudo-windows from about 5 to 7, which probably will not change the null. | Not built |
-| 2.2 | Push to GitHub. `gh` is not authenticated on this machine, so run `! gh auth login` in the session (or create an empty repo and give me the URL) and I will push. Eight commits are ready; only source, tests, docs and the three reference JSON files are tracked, 659 KB. | Stays local |
-| 2.3 | Keep results as parquet only (D-21), or add a short write-up and figures? You said project folder only, before the gates existed. Worth reconfirming now. | Parquet only |
-| 2.4 | Sign off on the researcher-chosen numbers, or change them: D-06 liquidity floors (volume > 0, 5 trades, 500 open interest, 15% moneyness), the A5 allowance (0.3% of price), and the D-11 window lengths (63 and 42 sessions). Each already carries a sensitivity panel or a documented measurement. | Keep as is |
+`git clone` into a clean directory, `uv sync`, and the pipeline in README "Run it". The fresh
+`results/tables/*.manifest.json` must carry the cloned commit and the same `config_hash`.
+Status of the run made on 2026-11-11 is recorded in DECISIONS.md D-18 (A8 row).
 
 ---
 
-## 3. Optional work I can do next
+## 3. Optional work, by value
 
-Ordered by value for effort. Say the word on any of them.
-
-1. **BANKEX as a second BSE unit (half a day).** Already in the downloaded BSE files. Gives a
-   lower-dose treated unit on the BSE side, the mirror of Bank Nifty on NSE.
-2. **Bank Nifty dose-response at Nov-2024 (half a day).** D-04 noted the treated/control roles swap
-   at that event and the code supports it, but the estimate was never run.
-3. **Securities transaction tax on exercise (a day).** D-17 excluded it. It is large in Indian index
-   options and interacts with expiry-day pinning, so it plausibly changes the entry-price number.
-4. **Figures (two hours).** Everything is parquet right now. Weekday weights with intervals, the
-   sensitivity surface, the permutation distribution.
-
----
-
-## 4. What is already done
-
-Gates: A1 open-interest chain (99.980% over 1.8M transitions), A2a forward vs listed futures
-(+1.51 bp Nifty, -1.22 bp Sensex), A2b per-strike dispersion, A3 conditioning, A5 Heston MC vs
-Fourier over 20 parameter sets, A6 hedging vs the EKJS closed form, A7 the 16-cell sensitivity
-surface. A4 ran and reports a null, which is a result and not a gap. 23 tests pass.
-
-The Heston robustness sweep is also done (D-24): swept over correlation and vol-of-vol, the clock
-share of hedging-error standard deviation stays at 2.13 to 2.37% across all twelve cells, against 2.1
-to 2.3% under constant volatility. Rebalance frequency moves it more than either Heston parameter, so
-the headline does not rest on assuming constant volatility. Its vol-of-vol-to-zero reference row is a
-permanent test: it caught a bug that had inflated the share to 3.5%.
-
-Findings, in one line each. Nifty expiry sessions carry significantly less variance and that is
-stable across half-samples. Sensex does not replicate it. Whether the Sep-2025 rule caused Nifty's
-shift is untested and, with Sensex too thin to use as a control, stays that way. The clock costs a
-calendar-time trader about 22% on a one-session option and almost nothing over a full week, and it
-moves hedging P&L dispersion by about 2% at every rebalance frequency and cost in the grid.
+1. **Extend the sample past 2026-09-04.** Rerun `src.ingest.download` and the pipeline. Marks the
+   2026-10-07 RBI date and adds about two months to the Tuesday regime. An hour, mostly download.
+2. **Futures STT on the delta hedge** (D-30). Path-dependent, so it does not cancel the way option
+   STT does. A small addition to the hedging experiment. Half a day.
+3. **Bankex and Bank Nifty returns channels** (D-31, D-32). Needs Bankex index closes from BSE.
+   Half a day.
+4. **Options-channel interval on the dose ratio** (D-32). `fit` now returns bootstrap draws, so the
+   Sep-2025 R = 0.75 can get an interval. An hour.

@@ -192,7 +192,7 @@ scheduled variance, and omitting them dumps that variance onto whichever weekday
 
 Rejected: a free weight per calendar day. Fits everything, identifies nothing.
 
-**OPEN:** `data/reference/macro_events.json` has Union Budget days only. RBI MPC dates are not
+**Closed by D-07a and D-26:** RBI MPC dates are now sourced; the dummy is identified on Nifty (x2.2 / x2.0) and the expiry dip survives it. Original note: `data/reference/macro_events.json` had Union Budget days only. RBI MPC dates are not
 derivable from NSE archives and D-02 forbids asserting them. Until supplied, RBI variance leaks
 into weekday weights.
 
@@ -416,6 +416,8 @@ it is recorded and not claimed.
 **The design is thin, not just this sample.** Adjacent pseudo dates share almost all their data;
 there are about five independent pseudo windows. No p-value from this design can be much smaller
 than one in six. The stock channel involves no model fit and is plainly null (percentile 30-35).
+
+**Rerun 2026-11-11 after D-26's estimator changes.** Nifty rows unchanged (h = 63: S* -2.251, p 0.122; h = 42: p 0.122). The rank guard now refuses 19 Sensex h = 63 pseudo-windows that had condition numbers of 1e16 or worse: Sensex n 48 -> 29, DiD p 0.102 -> 0.100. The h = 42 DiD p = 0.021 is still the 1e-60 Sensex weight artefact (D-22) and is not a result.
 
 **What could change the answer:** BSE Sensex (tried 2026-09-12: 39 of 48 Sensex window fits are
 degenerate, so the DiD is not evaluable, D-22); the legacy 2023 reader (more pseudo windows; D-02 made
@@ -805,8 +807,542 @@ D-22, and the entry-price table: none of them touch the hedge.
 
 ---
 
+## D-07a · RBI MPC dates - SET (amends D-07 OPEN)
+
+`data/reference/macro_events.json` `rbi_mpc` holds 17 policy announcements, 2024-02-08..2026-10-07, all from rbi.org.in only.
+- Each date is the 'Date:' field of the 'Resolution of the Monetary Policy Committee' release.
+- Each date maps to its prid URL in `rbi_mpc_sources`.
+- Index: https://www.rbi.org.in/Scripts/Annualpolicy.aspx. All 17 re-fetched 2026-11-10.
+
+Completeness (no off-cycle meeting in the window):
+- **Meeting numbers 47..63, every one read, no gap.** The minutes give 46th (Dec-2023) through 59th (Feb-2026): prid 56982, 57366, 57735, 58136, 58545, 58958, 59347, 59818, 60279, 60686, 61056, 61433, 61856, 62261. The resolutions give 53rd through 63rd. That is 17 numbers for 17 dates.
+- **Year views of the index page.** FY 2023-24, 2024-25, 2025-26 and 2026-27 list 1, 6, 6 and 4 resolutions in the window, and no other MPC decision.
+- **Consistency only.** Each resolution's 'next meeting' line names the next date in the list, starting from Dec-2023 (prid=56888). This check cannot reveal an unscheduled meeting.
+
+Count per FY: 6 / 6 for FY24-25 / FY25-26. FY26-27 has 4 to date; Dec 2-4 2026 and Feb 3-5 2027 are scheduled (PublicationsView id=23800). Six is practice; RBI Act s.45ZI(1) requires 'at least four' (prid=46626). One reschedule: Aug-2025 moved Aug 5-7 -> Aug 4-6 (prid=60612, s.45ZI(4)); announced 2025-08-06.
+
+Where the dates fall:
+- All weekdays: 8 Fri, 7 Wed, 2 Thu, 0 Mon/Tue.
+- 16/17 are NSE sessions. 2026-10-07 is past the calendar window (ends 2026-09-07, last session 2026-09-04) and stays unmarked until the calendar is extended.
+
+Overlap with actual expiry days. This is measured against the panel IDO expiry set, the `estimate._expiry_days` rule, not inferred from weekdays:
+
+| Symbol | Overlap | Dates |
+|---|---|---|
+| NIFTY | 3/17 | 2024-02-08, 2024-08-08, 2025-04-09 (Wed holiday roll) |
+| BANKNIFTY | 1/17 | 2024-10-09 |
+| SENSEX | 5/17 | 2024-04-05, 2024-06-07, 2024-12-06, 2025-02-07 (Friday regime); 2025-10-01 (Wed holiday roll) |
+| BANKEX | 0/17 | none |
+
+So b (expiry) and c (macro) share sessions. With 17 macro days, Sensex c is weakly separated from b: 12 of its 17 days are not expiry days.
+
+Expected effect, untested until refit: before this change, MPC variance would have loaded on a[Fri] and a[Wed] and, for Sensex, on b. Rerun `src.clock.estimate` with and without the dummy and report how a[Fri], a[Wed] and b move.
+
+Rejected:
+- Dates from memory or secondary sites (news, broker calendars). D-02 forbids them.
+- The Governor's Statement or press-conference date. Same day here, but the resolution is the decision of record.
+- Marking the first meeting day. Only the announcement day carries scheduled news.
+- Proving completeness from the next-meeting chain. It is blind to off-cycle meetings.
+
+Falsifiers:
+- An rbi.org.in release showing an MPC decision in 2024-01..2026-11 that is not in the list.
+- A minutes or resolution number that breaks 47..63.
+- For Sensex, c is not robust to dropping the 5 MPC sessions that are also expiry days: a sign flip or a CI that more than doubles. If so, b and c are not separately identified there; report only their sum.
+
+---
+
+## D-26 · Clock fits persisted; the macro dummy, finally (D-07, D-08b, D-22) - SET
+
+`src.clock.regimes` reruns every within-regime fit and writes three tables. Before this the D-08b and D-22 numbers existed only in logs.
+- `clock_fits`: point, 95% CI, cond, VIF, `n_draws` of `n_boot`, the share of draws outside [0.1, 10], `identified`, `weekdays_in_range`, a `flag` naming the parameter that tripped it, and `split_rule`.
+- `clock_boot`: every normalised draw.
+- `clock_obs`: the NIFTY regimes, demeaned observed vs fitted.
+
+**Reproduction is exact; the half conventions are reproduction conventions, not a rule.** Full regimes use 300 draws, halves 100, seed 0. How each half is split:
+- NIFTY Thu: the "halves" are the two sides of the D-10 blackout (..2024-11-12, 2025-02-03..).
+- NIFTY Tue and Sensex Thu: the end of the D-10 post-window, 2026-02-28.
+- Sensex Tue: its calendar midpoint.
+- Sensex Fri: 2024-06-18, recovered by scanning split dates, not derived. Its second half moves 1.398 to 1.426 over neighbouring dates.
+
+Each row carries its `split_rule`. Because of this, the half table is not evidence of stability. `tests/test_clock_regimes.py` pins all 27 published values.
+
+**Two published halves are degenerate.**
+- NIFTY Thu h1 (0.675): cond 2.96e10, weekend multiplier 1.5e-10. Its weekday weights are in range, and dropping the weekend parameter gives 0.683 at cond 6.9. The Thursday number stands, but the fit should have been flagged.
+- Sensex Fri h1 (1.137): cond 9.5e8, Monday 4e-8. Its weekdays are out of range. Not a finding.
+
+D-22's half table should mark both. So should Sensex Tue h1/h2 (cond 42.7 / 31.7, 49% of h2 Tuesday draws at the boundary: an indicative interval only). No bootstrap draw failed on any fit (n_draws = n_boot on all 205 rows).
+
+**Macro dummy (17 RBI MPC + 3 Budget sessions, D-07a).** Identified on NIFTY: x2.245 [1.835, 2.604] in the Thu regime and x2.032 [1.564, 2.678] in the Tue regime, VIF 1.1-1.2. Weekday weights move by at most 13.5%:
+
+| | weekday-only | + macro |
+|---|---|---|
+| NIFTY Thu regime, Thu | 0.699 [0.483, 0.889] | 0.771 [0.620, 0.932] |
+| NIFTY Thu regime, Fri | 1.299 [1.058, 1.477] | 1.134 [0.890, 1.335] |
+| NIFTY Tue regime, Tue | 0.607 [0.298, 0.844] | 0.645 [0.351, 0.878] |
+| NIFTY Tue regime, Mon | 1.459 [1.163, 1.780] | 1.442 [1.179, 1.733] |
+| Sensex Fri regime, Fri | 1.409 [1.077, 1.693] | 1.338 [0.808, 1.661] |
+
+The expiry-weekday suppression survives the contaminant check, and 3 of 4 NIFTY halves still exclude 1. Two premiums were partly scheduled macro variance:
+- The Thu-regime Friday premium: 5 of the window's 12 macro sessions are Fridays, and with the dummy the premium is no longer significant.
+- The Sensex Friday high: "Sensex own expiry is high" (D-22 reading 3) weakens to "not low".
+
+Weekday-only remains the published specification. With-macro is the robustness row, and `clock_fits` carries both.
+
+**Bank Nifty and Bankex.**
+- Bankex is not estimable from the options channel: 507 quotes on 506 dates, and one maturity per date demeans to nothing. All six fits are refused.
+- Bank Nifty's Wednesday-weekly regime runs the weekend multiplier to zero. It is flagged, with weekdays in range: Wed 1.16 [0.85, 1.42].
+- Its two monthly-only regimes fit: Thu 1.08 [0.61, 1.67] at cond 15, and Tue 0.81 [0.49, 1.16] at cond 5.0.
+- No Bank Nifty own-expiry weight is significantly low, which is consistent with a lower dose (D-04).
+
+**Estimator changes, and what they touch.**
+1. `_expiry_days` counts an expiry only if its series is quoted on that session, the same rule as `regime_scan`. Re-dated contracts (NIFTY 2025-09-25 -> 09-30) had been marking phantom expiry sessions. Within-regime fits carry no expiry dummy and are unaffected. The full-sample default fit moves: NIFTY expiry_day 1.043 -> 1.003 and Thu 0.741 -> 0.763; BANKNIFTY Tue 0.911 -> 0.571. Neither is quoted anywhere.
+2. `fit` refuses when the demeaned Jacobian at the start is rank-deficient or residual df <= 0. This used to return start values and zero-width intervals.
+   - D-11 at h = 63 has 19 Sensex pseudo-windows (2024-04-02..08-13) that had cond 2.5e16 to inf. They become NaN, and `summarise` drops them from the null.
+   - Sensex all-fits: n 48 -> 29, p 0.020 -> 0.033. DiD all-fits: p 0.102 -> 0.100.
+   - The NIFTY rows, the h = 42 rows and the "39 of 48 degenerate" count are unchanged. `permutation.parquet` needs a rerun.
+
+Rejected:
+- Dropping unidentified fits from the table. That would hide exactly the cases a reader needs to see.
+- Choosing new half splits on a uniform rule now. That would quietly change published numbers, so the rule is recorded instead.
+- Keeping the old `_expiry_days`. It was wrong whenever the exchange re-dates contracts.
+
+Falsifiers:
+- An independent RBI/Budget list that changes the macro sessions and moves NIFTY Thu outside [0.62, 0.93].
+- A half-split rule under which a NIFTY half reverses direction.
+
+---
+
+## D-27 · The continuous-hedging limit: the floor, and where the clock overtakes rebalancing - SET
+Question: as rebalancing m -> inf, what sd floor does calendar-minus-clock P&L keep, and at what m does it overtake discretisation? Setup: Tue-regime clock, opened Wed, 5 sessions, 13% vol, spot 25000, entry 365.26, zero cost. Code: src/sim/mlmc.py (Giles estimator), src/sim/continuous_hedge.py (closed forms; a needed new module outside the original file list), src/experiment/hedging_limit.py. Tables: results/tables/{mlmc_levels,hedging_limit}.parquet.
+
+**Floor.** F = 12.17 index points = 3.33% of premium = 0.43 vol points (vega 28.10 points per vol point). This is the closed form, 12.169. A straddle's dollar gamma is a Gaussian kernel in log-moneyness, K n(x; R/2, R), so E[I^2] is a double time integral of Gaussian products. Confirmations:
+- (a) The hedge itself: MLMC over m = 1..256 with exact subsample coupling and a Richardson tail at alpha = 1 gives 12.151 +/- 0.017 (z = -1.05).
+- (b) The EKJS sum by MLMC: 12.170 +/- 0.006.
+- (c) Control variate at m = 256 (EKJS sum, exact E[I_m^2]): 12.157 +/- 0.005.
+- (d) A review-time pathwise MC on a sqrt(T - t) grid, sharing no code: 12.173 +/- 0.005.
+- The exact discrete E[I_m^2] approaches F^2 like a/m plus an m^-3/2 corner term; m(E[I_m^2] - F^2) = -249 at m = 256.
+
+**Rates.**
+- Clock trader: sd(clock_m) = c m^-1/2 with c = 144.2 +/- 0.5 at m = 256, against 144.8 leading order (Bertsimas-Kogan-Lo form). Crossover m* = (c/F)^2 = 141 hedges per session, about one every 2.7 minutes of a 375-minute session. Below it rebalancing is the larger risk; above it the clock is.
+- Calendar trader: c_cal = sqrt(m(E[cal^2] - F^2)) = 143.4 +/- 1.3, m*_cal = 139 +/- 3. Both are measured, not predicted. E[cal^2] - F^2 = E[e^2] + 2E[I_m e] + (E[I_m^2] - F^2) with e = cal - I_m. The noise term matches its closed form (sqrt(m E[e^2]) = 138.6 +/- 0.4 against 138.8). The cross term m E[2 I e] = +1451 +/- 235 is the same order 1/m and has no closed form here. Rejected: quoting the noise-only 138.8 (and m* = 130) as the calendar constant. It sat 3.5 se off the measurement.
+- The difference around I: c_diff = 15.14 against 15.15 closed form, so diff - I_m = O(m^-1/2) pathwise. That is A6's L2 identity, now with a constant.
+- That the m^-1/2 rate survives the straddle's kink is a measurement (flat sqrt(m E[clock^2]) over l = 3..8), not a cited theorem. Not cited: Gobet-Temam 2001, which has a 2014 correction note that was not read.
+
+**MLMC does not pay here.**
+- beta fits at 0.83 over l = 2..8 (0.96 locally at a review-time l = 9). That is the Giles boundary beta = gamma = 1, approached from below.
+- c_diff > F (m*_diff = 1.6), so a coarse level predicts the fine one poorly and V_l C_l is flat.
+- Cost ratio single/MLMC is 0.58. The control variate costs 42x less than single level.
+- MLMC is kept for the sd-against-m curve and for lim E[diff^2 - I^2] = -0.47 +/- 0.44 points^2 (theory 0).
+- Rejected: telescoping E[clock_m^2]. The level-0 variance (1.3e9) buries a level-8 mean of 81.
+
+**Falsifiers.** Any of these would mean the hedge does not converge to the EKJS integral or the kernel algebra is wrong:
+- lim E[diff^2 - I^2] not 0
+- c_diff or c_cal_noise drifting with m (15.45 and 138.0 at m = 16; 15.14 and 138.6 at m = 256)
+- F not linear in the clock deviation (F(eps)/|eps| = 11.63 at eps = +/-0.01)
+- a flat clock not giving F = 0 (tested)
+
+Stale after this entry: every '2.1-2.4% share' figure.
+
+---
+
+## D-28 · The entry-price headline under stochastic volatility, and terminal MC - SET
+Both traders price in time-changed Heston (D-24 dynamics, v0 = theta, kappa 2, theta 0.13^2), exactly. The affine char fn is chained backward over constant-clock pieces using the Mikhailov-Noegel closed form with nonzero B0, and the Lewis integral is cut at 40/sd.
+Checks:
+- w=1 reproduces plain Heston to 1e-12.
+- Splitting a piece changes nothing.
+- A complex ODE integration agrees to 1e-15 over the whole integration range, compared on the exponent at u = 6000 where |phi| ~ 1e-19.
+- xi=1e-3 gives Black-76 to 2e-7.
+- An independent Gil-Pelaez inversion agrees to 2e-6 index points.
+- Clocked QE MC agrees within 3 SE.
+
+Result: the Monday 1-session error is -21.831% under GBM and moves at most 0.006 pp over rho {0,-0.3,-0.6,-0.9} x xi {0.2,0.5,0.8}.
+- Why Monday barely moves: on one constant piece the variance law is the same for both clocks, and only the skew term k3/(12m) differs, by rho xi T (sqrt(w)-1)/8.
+- Largest movers: the Mon calendar spread, +0.36 pp at (-0.9, 0.8), and Fri, +0.34 pp at (0, 0.8). Fri moves because a heavy session followed by the light expiry session lowers k4/m^2.
+- The Edgeworth factor 1 + k3/(12m) + (k3^2/m^3 - k4/m^2)/24 predicts every single-straddle shift within 0.013 pp.
+- Applied leg by leg to the spread, it gets the sign right in all 12 cells but misses by up to 0.096 pp (rho 0, xi 0.8: +0.148 predicted vs +0.052 exact). The truncation error on the 6-session leg, 1.3e-3 to 1.6e-3 relative, cancels in a ratio of straddles but not in a difference of them.
+- An independent rho=0 mixing MC confirms Fri at +0.340 +/- 0.005 pp.
+- The headline is a property of the clock's shape, not of constant vol.
+
+Terminal MC (D-14 made good). Estimators:
+- Conditional MC (Romano-Touzi mixing).
+- Conditional MC plus a frozen-variance Black-76 control on the same normals.
+- RQMC: scrambled Sobol with PCA ordering, 16 randomisations.
+
+Efficiency is 1/(variance x seconds), relative to plain. Variance per path comes from 3x2^17 i.i.d. units (relative SE under 1%), seconds from the fastest of 3 runs. The first table used 16 replications and was wrong in direction: it showed conditional at 0.51x plain, which breaks Rao-Blackwell.
+- Conditional: 7.0 to 8.6x at (-0.6, 0.5), 1.45 to 1.62x at (-0.9, 0.8). The gain falls with |rho| because only the (1-rho^2) share of spot noise is integrated out.
+- With the control: 111 to 541x at (-0.6, 0.5), 7.4 to 36x at (-0.9, 0.8).
+- RQMC-conditional: RMSE ~ n^-1 on 1-2 session straddles despite QE's branch switch (slope -0.94 to -1.09; -0.79 on the 6-session spread). At n=2^15 that is 2e3 to 7e5x plain.
+- Rejected, antithetics: ATM straddles are even in the spot normal, giving efficiency 0.47 to 0.67 of plain (variance ratio 0.51 to 0.67).
+- Rejected, linear controls in I: the conditional straddle is even in rho I.
+- Timing noise reaches 27% between repeats on a shared machine, so efficiency ratios are good to about +/-30%. The variance part is good to about 2%.
+
+Falsifiers:
+- Any w=1 or split-piece mismatch above 1e-12.
+- A Fourier-vs-QE gap above 3 SE.
+- A single-straddle shift outside the expansion by more than 0.02 pp.
+- Per-path var(conditional) > var(plain) on shared variance paths.
+
+---
+
+## D-29 · Clock uncertainty carried into the price and the hedge - SET
+
+`src.experiment.clock_uncertainty` reruns the entry-price and hedging experiments once per bootstrap
+draw of the Nifty within-regime clock (300 per regime, `clock_boot`), each draw rescaled to a
+five-day mean of one so both traders still agree on the week. Prices are exact Black-76 per draw.
+Hedging uses 50,000 paths per draw with **the same seed for every draw** (common random numbers), so
+the spread across draws is parameter uncertainty, not path noise.
+
+**Derived before running, and confirmed.** With the week pinned at 5, a one-session straddle and the
+Monday calendar spread depend on a single weight, monotonically, so a percentile interval of that
+weight maps through exactly: the old "-45% to -8%" mapping was already right, and the propagated
+band reproduces it to the third decimal. Multi-session spans depend on the joint law, and the
+mean-one normalisation makes weights negatively correlated, so reading them off marginal intervals
+is wrong:
+
+| Tue regime | point | propagated 95% band | P(< 0) | naive (marginal) band |
+|---|---|---|---|---|
+| straddle opened Mon (1 session) | -21.8% | [-45.2%, -8.0%] | 1.00 | [-45.2%, -8.0%] |
+| opened Fri (2) | +2.0% | [-2.4%, +7.1%] | 0.20 | [-14.4%, +15.0%] |
+| opened Thu (3) | -0.6% | [-5.1%, +3.2%] | 0.63 | [-16.6%, +12.2%] |
+| opened Wed (4) | -1.3% | [-5.0%, +2.8%] | 0.74 | [-17.6%, +12.9%] |
+| opened Tue (5, full week) | 0 | exactly 0 | - | [-16.5%, +13.8%] |
+| Monday near/far spread | +9.5% | [+3.3%, +21.0%] | 0.00 | [-3.6%, +23.3%] |
+
+Thu regime, the one-session straddle (opened Wednesday): -16.6% [-30.5%, -5.9%], negative in 99.7%
+of draws. **The one-session error is negative in essentially every bootstrap clock in both
+regimes.** Only that row and the spread are robust in sign; everything over two or more sessions is
+indistinguishable from zero once the clock's own uncertainty is carried.
+
+**Hedging.** The clock-risk floor at the point fit is 12.16 (Tue regime) and 13.14 (Thu regime)
+index points, but across bootstrap clocks it spans [4.9, 23.1] and [7.8, 19.3]. That is the right
+size, not noise: the floor is linear in the clock's deviation from flat (D-27), so it inherits the
+weights' full relative uncertainty. Predictive sd of the calendar-minus-clock P&L at one hedge per
+session, `sqrt(E_w[sd^2])`: 12.34 (Tue) and 12.48 (Thu). The simulated `I_64` sd matches its exact
+per-clock value (11.997 vs 12.011 at the point fit, and draw by draw across the band), which is the
+check that the inner simulation is right.
+
+**Nested-simulation bias.** Every P&L here has mean exactly zero (D-25), so the predictive variance
+is `E_w[sd(w)^2]`, linear in the inner second moments and unbiased at any inner N. The outer
+quantiles of `sd(w)` carry the Gordy-Juneja inflation, about `(kurtosis - 1) sd^2 / (4N)`, measured as
+0.02-0.07% of the between-draw variance for the clock-risk quantities (`diff_sd`, `ekjs_sd`). It is
+not small for the clock trader's own sd (5% Tue, 88% Thu regime): that sd barely depends on the
+clock, so its spread across draws is mostly inner noise, and its band is not read as parameter
+uncertainty.
+
+**Read with care.** Per-draw *means* share one path realisation, so their P(< 0) of 1.00 (clock
+trader, Tue regime: -0.35) is one common Monte Carlo error, not an effect. The exact mean is zero.
+
+**Rejected.** Reporting the hedging floor at the point fit alone: it hides that the clock's
+uncertainty, not path noise, is what makes the floor uncertain. Re-seeding per draw: it would mix
+path noise into the parameter band.
+
+---
+
+## D-30 · STT on index options: sourced, and it cancels from the entry-price error - SET
+
+**Rates** (data/reference/stt_rates.json; every number read from a primary document, with its URL and sha256 prefix):
+- Statute: Finance (No. 2) Act 2004 s.98, serial 4.
+- Option sale, on the premium, paid by the seller: 0.0625% to 2024-09-30. 0.1% from 2024-10-01 (Finance (No. 2) Act 2024 s.162; NSE/FATAX/63809; BSE 20240916-61). 0.15% from 2026-04-01 (Finance Act 2026 s.159; NSE/FATAX/73524).
+- Exercised option, on the intrinsic price (settlement minus strike), paid by the purchaser: 0.125%, rising to 0.15% from 2026-04-01.
+- Futures: 0.0125 -> 0.02 -> 0.05%.
+- Before 2019-09-01, exercise was taxed on the settlement price (Memorandum to the Finance (No. 2) Bill 2019). That is the base behind the folklore "STT trap". It is outside the sample.
+
+**Result** (src/experiment/stt.py -> results/tables/stt_effect.parquet; Black-76 closed forms, no MC):
+- Reservation prices:
+  - a buyer who holds to exercise pays at most (1-e)C;
+  - one who sells on expiry day instead pays (1-p)C less the spread;
+  - a writer accepts at least C/(1-p).
+- Every one of these is C times a constant. So the calendar-vs-clock error, a ratio of two prices, is **unchanged at -21.83%** (1 session) and at +1.97 / -0.58 / -1.26 / 0.00% (2-5 sessions), in all three rate periods.
+- Largest measured shift: 2.2e-16. The cancellation is exact, not approximate. Quadrature of the taxed payoff at the clock and flat variances reproduces it to 1e-9, independently of the closed forms.
+- It survives windows that straddle 2024-10-01 or 2026-04-01, because the entry price carries only p and the exit only e.
+- Buyer-seller band: (p/(1-p) + e)C = 0.19 / 0.225 / 0.30% of the price by period, 0.24-1.10 pts across periods and opening days. Exercise STT alone is 0.16-0.55 pts.
+- Selling on expiry day instead of exercising saves (e-p)C:
+  - 0.08-0.23 pts to 2024-09;
+  - 0.03-0.09 pts from 2024-10 to 2026-03;
+  - zero from 2026-04, when the two rates are equal.
+- Rupee size of the error scales by at most 0.15%.
+
+**Expiry-day trap (D-17's worry).**
+- On the intrinsic base, exercise nets (1-e) times intrinsic >= 0 for every settlement. No trap exists, analytically.
+- On the pre-2019 notional base the losing band is K/(1+e) < S_T < K/(1-e), about 2eK wide (62.5 pts at 0.125%).
+- A 1-session ATM straddle settles inside that band 15.5% of the time under the clock, against 12.1% under flat variance. The band is fixed while the low Tuesday weight cuts the sd of S_T from 205 to 160 pts, which concentrates mass near the strike. It falls to 5.4% at 5 sessions, where clock and flat agree.
+- That base would have widened the error to -27.0% (forced exercise) or -26.2% (optimal exercise) at 0.125%, and to -28.3% / -27.2% at 0.15%.
+- Only a tax that is not proportional to the payoff moves the clock result. Current law has none for options held to expiry or closed on expiry day.
+
+**Rejected.**
+- (i) Modelling STT as a premium haircut on the clock price alone. That is an asymmetric treatment, and it manufactures an error that the symmetric statute cancels.
+- (ii) Using the notional base for the sample. It is not the law after 2019-09-01 (memo2024 confirms the intrinsic base). It is kept only as the labelled cf_ columns.
+
+**Not covered.** Futures STT on the delta hedge (0.02%, then 0.05%, of futures sold at each rebalance). It depends on the path and on the hedge frequency, so it does NOT cancel. It belongs to the hedging experiment (D-15/D-25), not the entry price, and is unmeasured here.
+
+**Falsifiers.** Any of these would reopen the cancellation:
+- a statute or exchange circular in the sample that taxes exercise on anything other than the intrinsic price;
+- an STT rate that differs between the two legs of the comparison;
+- a fixed per-contract charge. The verifier measured one: c0 = 1 / 5 pts moves the Monday error to -21.97 / -22.52%.
+
+Open: BSE notice 20260331-7 was not read (the scripted fetch returned an empty page). The 2026 Sensex rates rest on the Act and on NSE/FATAX/73524; s.98 applies to every recognised exchange.
+
+---
+
+## D-31 · Bankex, the second BSE unit - SET (result: not identifiable)
+
+Added 2026-11-10 (TO_DO 3.1). The aim was a BSE counterpart to Bank Nifty with a smaller treatment dose.
+- Same reader, forward, inversion and filters as Sensex (D-22, D-05, D-06). The only change is `bse_option_symbols = ("SENSEX", "BANKEX")`.
+- Every pre-existing NIFTY, BANKNIFTY and SENSEX row in the panels, forwards, surface and ATM tables is unchanged: same row counts, `DataFrame.equals` True.
+
+**Measured timeline** (`regime_scan` -> `regime_timeline_bankex.json`):
+
+| Regime | Span | Expiries |
+|---|---|---|
+| Monday | 2024-01-01 -> 2024-12-30 | 49; weekly through **2024-11-18**, then monthly only |
+| Tuesday | 2025-01-28 -> 2025-08-26 | 8, monthly |
+| Thursday | 2025-09-25 -> 2026-08-27 | 12, monthly |
+
+- **Weekly removal at Nov-2024 is measured, two ways.**
+  - Month-last rule: `last_weekly_expiry` 2024-11-18. The panel's tenor split agrees, but it uses the same rule, so that is a consistency check.
+  - Spacing, with no month rule: consecutive actual expiries are at most 10 days apart up to 2024-11-25, and at least 27 days apart after it. 2024-12-30 is December's only expiry.
+- **Rolls:** 7, all backward. Three Monday-regime rolls land on the previous Friday and one (2024-01-20) on a Saturday session. `days_early` counts across the weekend.
+- **Lot size:** 15 up to the Jan-2025 contract. 30 for Feb-2025 onward, first quoted 2024-12-12. 30 alone from 2025-01-29.
+- **Not run as an event:** Bankex moved Mon -> Tue (Jan-2025) and Tue -> Thu (Sep-2025), but there is no weekly in either regime.
+
+**A2a: futures-side trade floor, adopted post hoc.** Bankex failed the unfiltered gate: median +1.08bp, MAD 5.22bp on 589 expiry-days. The gate then gained `A2A_MIN_FUTURE_TRADES = 5` for every symbol, on D-06's own reasoning: an untraded settle is an exchange computation, not a price (D-02a). This was chosen after seeing the failure. The evidence that it is the benchmark and not the forward:
+- Bankex residual MAD by futures trade count: 8.2bp at 0 trades, 8.9bp at 1-4, 4.7bp at 5-49, 2.7bp at 50+. The parity forward's own standard error is 0.7-1.7bp throughout.
+- The pass is not knife-edge:
+
+| Symbol | Floor 0 | Floor 1 | Floor 5 | Floor 10 |
+|---|---|---|---|---|
+| BANKEX (n, median, MAD bp) | 589, +1.08, **5.22** | 499, +0.73, 4.38 | 384, +0.93, 3.88 | 301, +0.69, 3.47 |
+| SENSEX | 1108, -1.22, 1.77 | 1102, -1.21, 1.76 | 1093, -1.23, 1.78 | 1084, -1.24, 1.75 |
+| NIFTY | 1901, +1.51, 1.57 | same | same | same |
+| BANKNIFTY | 1769, +0.40, 2.12 | same | same | same |
+
+- `test_bankex` checks Bankex A2a at floors 1, 5 and 10.
+- A2b: weekly 6.66 points, monthly 12.34.
+- **Falsifier:** a Bankex forward whose MAD against *50+-trade* futures exceeds 5bp.
+
+**The clock is not identified in any regime, and no filter choice fixes it.**
+- 507 ATM expiry-days: 98 weekly, 409 monthly.
+- Dates carrying two or more maturities: 1 in the Monday weekly era, 0 in Tuesday, 0 in Thursday.
+- Why that is fatal: the options channel (D-08) identifies weights only through differences between maturities on the same date. Removing the per-date scale zeroes a single-maturity date.
+- Result: rmse 0, condition 3.9e31 (Monday) or infinity (Tuesday, Thursday), bootstrap intervals collapse to points. The printed weights are the optimiser's start values; nothing may cite them.
+- Cause: Bankex trades only its nearest contract. Median trades per expiry-day are 7,106 for the nearest listing, 4 for the second, 1 for the third. Dropping the D-06 floor from 5 to 1 adds a second maturity on only 37 dates.
+- **Rejected:** loosening D-06 to manufacture a second maturity. That fits the exchange's settlement model, not the market.
+- **Rejected:** a cross-regime fit with an expiry dummy. Every window still has one maturity per date.
+- **What would change this:** a Bankex returns channel (D-09). Bankex index closes are not downloaded.
+- **Falsifier:** a later sample in which more than ~30% of Bankex sessions carry two or more liquid maturities.
+
+### D-31a · Correction to D-02b and D-22 · Contracts moved to new dates are not off-weekday expiries
+
+`regime_scan` used to take the set of *listed* expiry dates. Exchanges move live contracts to new dates when the schedule changes. The old date is still a trading day but never expires, so the scan read it as an off-weekday expiry. An expiry now counts only if its contract is quoted on its own expiry session.
+
+The scan now fails on a missing daily file instead of skipping it. A test pins that all 666 sessions have both the NSE and the BSE file, so an expiry cannot drop out silently.
+
+- **NIFTY, confirmed from the raw zips.**
+  - 2025-07-31: 198 rows (99 strikes) for Thu 2025-09-25, OI 27.6M.
+  - 2025-08-01: 0 rows for 09-25, and 198 rows (99 strikes) for Tue 2025-09-30, OI 28.6M.
+  - 2025-09-25: no NIFTY option expires.
+  - 2025-12-24 and 2026-06-25 were moved the same way.
+  - Effect: Tue regime 56 -> **53** expiries. Off-weekday expiries 11 -> **8**, all backward rolls. The "3 not rolls" in D-02b were these moved contracts, not other tenors.
+- **SENSEX.**
+  - Fri regime 54 -> **53**. 2024-11-01 was listed only 2024-09-24..09-26; the 2024-10-31 contract replaced it.
+  - Tue regime 39 -> **34**. 2025-01-10, 01-17, 01-31, 02-07 and 03-28 were all last quoted 2024-12-31 and moved to Tuesday.
+  - Thu regime unchanged at 53. Off-weekday expiries 15 -> **10**, all backward.
+  - **Retracted:** "five Friday expiries sit inside the Tuesday regime, contracts listed under the old schedule running off". None of them expired.
+- **Unchanged:** regime boundaries, lot staircases, weekend sessions, XpryDt mismatches (0), for both symbols.
+- **Resolved in D-26:** `src.clock.estimate._expiry_days` had marked the moved dates as expiry days:
+  - NIFTY 2025-09-25, 12-24, 2026-06-25
+  - SENSEX 2024-11-01, 2025-01-10, 01-17, 01-31, 02-07, 03-28
+  - BANKEX 2025-01-27, 02-24
+  - This affected only fits with the `expiry_day` dummy. D-26 applies the same quoted-on-its-own-session rule there.
+
+---
+
+## D-32 · Bank Nifty dose-response across Nov-2024 and Sep-2025 - SET, RUN: null
+
+TO_DO 3.2, D-04. `src.analysis.dose_response`. Roles are read from the panel per event. A unit is treated when the modal weekday of its own expiry sessions changes between windows. An expiry counts only if its series is quoted on its own session; BANKNIFTY 2025-01-29, re-dated and last quoted 2025-01-01, is not an expiry session.
+
+**Measured roles.**
+- Nov-2024: BANKNIFTY treated, Wed -> Thu. The pre-window had 24 Wednesday weeklies and 2 holiday-shifted Tuesdays, so d* = Wed. The post-window has 6 Thursday monthlies. Dose 1.00 -> 0.25.
+- Nov-2024: NIFTY is the control, Thu -> Thu, dose 1.00.
+- Sep-2025: both treated, Thu -> Tue. NIFTY dose 1.00 -> 0.96, BANKNIFTY 0.25 -> 0.23.
+
+**Windows and the lot staircase.** `tests/test_dose_response.py::test_window_cut_offs_match_the_measured_lot_staircase` measures the lot staircase from the panel and asserts it against WINDOWS. These dates are therefore measured, not remembered.
+- Bank Nifty lots: 15 -> 15&30 (2024-11-28) -> 30 (2025-01-31) -> 30&35 (2025-04-25) -> 35 (2025-06-27) -> 30&35 (2025-10-29) -> 30 (2025-12-31).
+- Nifty lots: 25 (2024-04-26) -> 25&75 (2024-11-22) -> 75 (2025-01-31) -> 65&75 (2025-10-29) -> 65 (2025-12-31).
+- The D-10 blackout ends on 2025-01-31, the day both overlaps resolve.
+- Windows with one lot size per unit: the Nov-2024 pre-window, the Nov-2024 post-window cut to 2025-04-24, and the Sep-2025 post-window cut to 2025-10-28.
+- Mixed windows: the Nov-2024 full post-window (BN), the Sep-2025 full post-window (both), and **the Sep-2025 pre-window (BN, 2025-04-25 and 2025-06-27), which no variant cleans.**
+
+**Pre-registration, written 2026-11-10T09:05+05:30 before any statistic (verbatim, tmp/dose_prereg.txt):**
+
+    Bank Nifty dose-response (TO_DO 3.2, D-04) - PRE-REGISTRATION
+    Written 2026-11-10T09:05+05:30, before any Bank Nifty weight, return statistic or expiry weekday was
+    computed for this item. Nothing below has been looked at in the data yet.
+
+    DEFINITIONS (fixed now)
+    - d*  = the modal weekday of BANKNIFTY *weekly* expiry dates in the Nov-2024 pre-window, measured
+            from the panel (tenor == "weekly"), not assumed. Expected from memory: Wednesday; the code
+            uses whatever is measured.
+    - Roles are derived from the data per event, never hardcoded: a symbol is TREATED at an event if
+      the weekdays carrying its expiry sessions change between the pre- and post-window; CONTROL if
+      they do not. Expected: Nov-2024 treated = BANKNIFTY (weekly ceases), control = NIFTY; Sep-2025
+      both treated, BANKNIFTY at lower dose (monthly only).
+    - dose  = share of the moved weekday's sessions in the window that are own-expiry sessions.
+    - Weights: mean-one over the window's weekday sessions (D-01).
+
+    WINDOWS (fixed now)
+    - Nov-2024: pre 2024-05-13 .. 2024-11-12 (six months, starts after the 2024-04-26 lot change);
+      post 2025-02-01 .. 2025-07-31 (six months after the D-10 blackout 2024-11-13 .. 2025-01-31).
+      If a BANKNIFTY lot change is measured inside either window, it is reported, not trimmed silently.
+    - Sep-2025: D-10 windows, pre 2025-03-02 .. 2025-08-28, post 2025-09-02 .. 2026-02-28, plus the
+      contamination-free sub-window 2025-09-02 .. 2025-10-28 reported beside it.
+
+    CHANNELS (fixed now)
+    - Returns: close-to-close log returns of "Nifty Bank" and "Nifty 50" on the trading-session
+      sequence (weekend sessions stay in the chain, excluded from the weekday vector, D-02c), divided by
+      an EWMA variance forecast (lambda 0.94, information to t-1 only). Weekday weight = mean z^2 on
+      that weekday / mean z^2 over weekday sessions. Budget and RBI MPC sessions excluded from the
+      weekday means (the D-07 macro control, done by exclusion). Inference: block bootstrap resampling
+      whole trading weeks, the same weeks for both indices, pre and post independently, 2,000 draws,
+      seed 0.
+    - Options: src.clock.estimate.fit(symbol, window, dummies=("weekend",)), 300 draws. A fit is read
+      only if condition number <= 30 and every weekday weight lies in [0.1, 10] (the D-11 health rule).
+      The options DiD is reported only if all four fits pass; otherwise "not evaluable".
+
+    ESTIMANDS
+    - Nov-2024:  DiD = [ln w_BN(d*,post) - ln w_BN(d*,pre)] - [ln w_N(d*,post) - ln w_N(d*,pre)].
+      Same weekday in both units, so any common shock to d* (other NSE weeklies removed at the same
+      event, calendar drift) cancels.
+    - Sep-2025:  S_u = [ln w_Tue(post) - ln w_Tue(pre)] - [ln w_Thu(post) - ln w_Thu(pre)] per unit,
+      and the dose ratio R = S_BN / S_N.
+
+    PREDICTIONS
+    H1 (own-expiry suppression, Nov-2024): if the expiry-session suppression is caused by the unit's
+       own weekly expiry, BANKNIFTY's d* weight rises toward 1 after its weekly is removed while
+       NIFTY's d* weight does not move: DiD > 0. With a suppression multiplier of 0.65-0.70 (the Nifty
+       point estimates, D-08b), the expected DiD is about +0.35 to +0.45. Corollary: pre-window,
+       w_BN(d*) < w_N(d*). NIFTY's own Thursday stays low across Nov-2024 (its weekly survived).
+    H0 / H_market: the suppression follows the dominant NSE expiry (Nifty Thursday), not the unit's
+       own: DiD ~ 0 and BANKNIFTY's d* weight is not low pre-window.
+    H2 (dose, Sep-2025): S_BN has the same sign as S_N (negative) and is smaller in magnitude. Under
+       H_own with multiplier m and dose f, S ~ 2 ln(1 - f(1-m)): with m ~ 0.65 and f_BN ~ 0.2-0.25,
+       R ~ 0.2. Under H_market, in the returns channel R ~ 1 (the Bank Nifty index shares the market
+       factor and the Nifty expiry day).
+
+    POWER, stated before running
+    - About 26 sessions per weekday per six-month window; z^2 has variance 2 (Gaussian) to ~5 (fat
+      tails), so SE(ln w_d) ~ 0.3-0.45 per window and per unit; the cross-index correlation of z^2
+      (expected ~0.5) shrinks the DiD SE to roughly 0.4-0.6. An effect of +0.4 is therefore expected
+      to be at or below one standard error. The returns channel is expected to be underpowered for H1,
+      and a CI straddling 0 is the most likely outcome. That would be a non-result, not evidence for
+      H0.
+    - Options channel post-Nov-2024: BANKNIFTY is monthly-only; D-09 expects it weakly identified.
+      Expected to fail the health rule; if so it is not read.
+
+    RANDOMIZATION INFERENCE
+    - Returns channel only (no fits, so cheap). Pseudo events every 5 sessions, h = 63 sessions each
+      side, eligibility from src.analysis.permutation._eligible (no window crosses Sep-2025 or touches
+      the Nov-2024 blackout). True-event statistic at h = 63: the 63 sessions before 2024-11-13 against
+      the 63 sessions from 2025-02-01. Effectively independent windows ~ 666 / 126 ~ 5, so p cannot be
+      much below 1/6. Kill condition as D-11: true DiD inside the middle 90% of the pseudo
+      distribution -> no evidence the Nov-2024 removal moved Bank Nifty's d* weight.
+
+    FALSIFIERS
+    - H1 falsified (not merely unsupported) if the DiD 95% CI lies entirely below +0.2 with its upper
+      end below the smallest predicted effect, i.e. the data exclude a suppression of 0.80 or stronger.
+    - H2 falsified if S_BN and S_N have opposite signs with both CIs excluding 0, or if R's CI lies
+      entirely above 1.
+
+**What is pre-registered and what is not.**
+- Pre-registered: the Nov-2024 DiD on the stated windows, level_gap_pre, Nifty's own-Thursday move, the Sep-2025 full windows and the 2025-10-28 sub-window, the h = 63 randomization with its kill condition, and the options health rule.
+- Post-hoc: the Nov-2024 post-window cut to 2025-04-24 (added after the BN 2025-04-25 lot change was measured, at 09:06, after the pre-registration), the disjoint-design count, the EWMA-0.97 and drop-largest-session sensitivities, and the Wednesday observation below.
+- The killed first attempt measured lot sizes, expiry weekdays and raw fits after 09:05. Its randomization null values were seen before the burn-in rule was considered; see Rejected.
+
+**Result, returns channel (2,000 week-block draws, seed 0):**
+
+| event | window | quantity | estimate | 95% CI | registered |
+|---|---|---|---|---|---|
+| Nov-2024 | full | DiD (BN - N, Wed) | +0.189 | [-0.708, +1.093] | yes |
+| Nov-2024 | full | level gap pre (BN - N, Wed) | +0.165 | [-0.307, +0.816] | yes |
+| Nov-2024 | full | Nifty d ln w_Thu | -0.499 | [-1.483, +0.738] | yes |
+| Nov-2024 | post to 2025-04-24 | DiD | +0.198 | [-0.810, +1.642] | no |
+| Nov-2024 | full, EWMA 0.97 | DiD | +0.289 | [-0.539, +1.206] | no |
+| Nov-2024 | full, without 2024-06-04 | DiD | +0.148 | [-0.690, +1.097] | no |
+| Sep-2025 | full | S_N / S_BN | +0.086 / -0.334 | [-1.18, +1.25] / [-1.62, +0.78] | yes |
+| Sep-2025 | to 2025-10-28 | S_N / S_BN | -1.379 / -1.543 | [-2.99, +0.58] / [-3.07, +0.52] | yes |
+| Sep-2025 | to 2025-10-28 | R | 1.119 | [-1.46, +4.93] | yes |
+
+No returns-channel bootstrap draw is non-finite (`boot_nonfinite` = 0 on every row), so the R intervals are over all 2,000 draws.
+
+**Reading the result.**
+- The DiD bootstrap sd is 0.449, inside the pre-registered 0.4-0.6.
+- H1 is neither supported nor falsified. Every interval contains both 0 and the predicted +0.35 to +0.45.
+- The corollary fails on its point estimate. Bank Nifty's own-expiry Wednesday was not lower than Nifty's Wednesday, and it did not move when its weekly was removed (ln w -0.791 -> -0.775).
+- Across the two sensitivities the DiD point moves between +0.15 and +0.29, so the null is stable but the point is not invariant.
+  - The slower EWMA moves BN Wed pre to -0.68.
+  - Dropping the largest-z^2 session moves it to -0.51. That session is found by the code, not named: 2024-06-04 (Tue), Nifty z^2 36.7, Bank Nifty 43.2. It is not a D-07 macro date, and it is measured only as the largest z^2, so no claim is made about what happened that day. Removing it lowers the window mean that every weight is normalised by.
+- On the full Sep-2025 window, R is not interpretable because S_N straddles 0.
+- The full window and the sub-window disagree for Nifty (+0.09 vs -1.38). By the D-10 clause, the late post-window, with its lot change, is doing work. The Sep-2025 pre-window also carries two Bank Nifty lot changes that no variant removes.
+- H2 is not falsified by either falsifier.
+
+**Randomization, h = 63:** true DiD +0.515, percentile 83.3 of 48 pseudo dates, upper p 0.184. **The kill condition fires.** Only 3 pseudo designs fit without sharing a session, not the ~5 the pre-registration assumed, so p cannot go much below 1/4.
+
+**Options channel (300 draws; health rule cond <= 30 and |ln w| <= ln 10):**
+- Nov-2024: the BN post-window fit has cond 377.7 (1.6e9 on the cut post-window), so it is not readable and the options DiD is not evaluable. D-09 predicted this.
+- Nov-2024 pre-window fits are healthy (cond 5.7 BN, 6.8 Nifty). BN own-expiry Wednesday w = 1.136 [0.565, 1.599] against Nifty own-expiry Thursday 0.522 [0.108, 0.974]. The point estimate shows no suppression on Bank Nifty's own weekly expiry. The interval does not exclude the 0.65-0.70 multiplier, and the two intervals overlap, so this fails to show suppression rather than excluding it.
+- Sep-2025 full: all four fits pass (cond 9.4, 29.1, 5.3, 5.9). S_N -1.765, S_BN -1.323, R = 0.75, as points only, because `fit` returns intervals, not draws. That sits nearer H_market's R ~ 1 than H_own's R ~ 0.2. It is not claimed: there is no interval, and the BN pre-window fit is 0.9 condition units from the threshold.
+- Sep-2025 sub-window: the BN post fit has cond 1.06e10, so it is not readable.
+
+**Unregistered observation, not tested.** In the returns channel Wednesday is the low day for *both* indices in three of four windows (w 0.32-0.46). That includes Nifty, whose expiry is Thursday, and Feb-Aug 2025, when no NSE index weekly expired on a Wednesday. It reverts to ~1 after Sep-2025. In close-to-close returns, the session before the Nifty Thursday expiry is quiet. That is not the own-expiry mechanism. It also restates D-08b: the returns channel does not reproduce the options-channel expiry-day suppression.
+
+**Rejected.**
+- Dropping pseudo windows whose pre-window starts inside the EWMA burn-in (first 63 sessions). It would move the percentile from 83 to 97 and p from 0.184 to 0.056, but the rule was written after the early null values from the killed attempt's table had been seen. That is the D-11 forking-path pattern. Those early values (+0.96 to +1.20) are also the same under any EWMA seed and under raw r^2, so the rule would remove real null mass, not an artefact.
+- Excluding named sessions such as the election result from the headline. Dropping the largest-z^2 session is a data-chosen sensitivity only; common shocks cancel in the DiD.
+- Trimming the Sep-2025 pre-window to Bank Nifty's constant-lot stretch (2025-06-27 to 2025-08-28, about 2 months). It would be an unregistered fork and too thin to identify a weekday weight.
+
+**Falsifiers that still stand:** an H1 DiD CI entirely below +0.2. Under H2: opposite-signed S_BN and S_N with both CIs excluding 0, or R's CI entirely above 1.
+
+**What could change the answer:**
+- Draws from `fit`, for an options-channel interval on R.
+- Intraday returns (D-09).
+- The legacy 2023 reader: more pseudo windows, and a pre-Sep-2023 Bank Nifty Thursday weekly as a second Nov-type event.
+
+---
+
+## D-33 · Figures and the report (amends D-21) - SET
+
+D-21 made the folder the deliverable with no paper. Asked again on 2026-11-10, the answer is figures
+plus one self-contained HTML page: `uv run python -m src.report.build` writes `results/figures/*.png`
+and `results/report.html` (images embedded, opens offline). Still no paper; the narrative stays here.
+
+Rules the figures follow, so the next one does not re-decide them (`src/report/style.py`):
+- Every estimate carries its interval; a fit flagged unidentified is drawn hollow, never dropped.
+- Multiplicative quantities (weights, standard deviations across rebalancing grids) on log axes.
+- One y-scale per panel. Colour is identity in a fixed slot order (blue = the clock or the quantity
+  under study, orange = its comparison, aqua = a third series), never rank.
+- Each figure's takeaway sentence is computed from the results tables at build time, and each
+  figure has a table view in the report, so no number is typed in twice.
+- The form follows the question: point-range forests for estimates, cumulative variance for the
+  clock as a time change, log-log sd against hedge frequency for the floor (it turns `m^-1/2` into
+  a straight line and the floor into a flat one), hexbin scatter for the pathwise EKJS identity,
+  heatmaps for the two-parameter Heston sweep, histograms of 300 bootstrap clocks for the
+  propagated price error, and a symlog strip of the randomization null so degenerate pseudo-fits
+  stay visible without flattening the band that matters.
+
+Every figure was rendered and inspected before it shipped; label collisions, a scale crushed by
+degenerate fits, duplicate rows from a step-refinement study, and one overclaiming sentence were
+fixed on that pass.
+
+---
+
 ## Open
 
-- **RBI MPC dates** (D-07). Not derivable from NSE archives, not assertable from memory. Needed
-  before the macro dummy means anything.
-- **Within-regime specification** (D-08b). Plan: drop the expiry dummy within regime, keep it across.
+- **Intraday data** (TO_DO 1.3). The only route to the mechanism behind the Nifty expiry dip; both
+  daily-data candidates failed (D-08b). A budget decision, not a modelling one.
+- **Legacy 2023 reader** (D-02, D-11). Pre-committed if D-11 came out thin; it did, and D-32 found
+  only 3 disjoint pseudo designs. Would add about 250 sessions and a pre-Sep-2023 Bank Nifty event.
+- **Futures STT on the delta hedge** (D-30). Path-dependent, does not cancel; belongs to the hedging
+  experiment and is unmeasured.
+- **Bankex and Bank Nifty returns channels** (D-31, D-32). Bankex index closes are not downloaded.
+- **Within-regime specification** (D-08b). Settled in practice: weekday-only within regime, the
+  expiry dummy only across regimes.

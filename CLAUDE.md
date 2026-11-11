@@ -20,15 +20,18 @@ statsmodels, numba, pytest, matplotlib. Pydantic v2 for config. Notebooks explor
     uv run python -m src.clock.estimate          # weekday weights + bootstrap CIs
     uv run python -m src.analysis.expiry_effect  # mechanism tests; .permutation for D-11
     uv run python -m src.experiment.mispricing   # entry-price error; .sensitivity for the A7 surface
+    uv run python -m src.clock.regimes           # all regime fits + bootstrap draws (feeds UQ, report)
+    uv run python -m src.experiment.hedging_limit  # MLMC clock-risk floor (~20 min); .heston_entry, .clock_uncertainty, .stt
+    uv run python -m src.report.build            # results/figures/*.png + results/report.html
 
 ## Layout
     data/raw/{nse,bse}/     immutable archives + MANIFEST.json + calendar.json (BSE cross-checked)
     data/reference/         regime_timeline.json (generated), RBI policy + Budget dates
     data/panel/             parsed parquet, partitioned by year
     src/config.py           Pydantic settings, validated at import
-    src/ingest/ src/iv/ src/clock/ src/analysis/ src/sim/ src/experiment/
+    src/ingest/ src/iv/ src/clock/ src/analysis/ src/sim/ src/experiment/ src/report/
     tests/                  test_acceptance_*.py mirror the A1..A8 gates in DECISIONS.md
-    results/{tables,figures}/    the deliverable - there is no paper (D-21)
+    results/{tables,figures}/, results/report.html    the deliverable - no paper (D-21, D-33)
     DECISIONS.md            every modelling choice + why. Update BEFORE writing the code.
 
 ## Env
@@ -57,4 +60,13 @@ NAME only: NSE_DATA_KEY. Never inline, never logged.
 - Sep-2025: Nifty Thu->Tue, Sensex Tue->Thu (measured). Bank Nifty moved with Nifty: treated, not
   a control. Causal language only if the Nifty-minus-Sensex DiD passes D-11. D-03, D-04, D-22.
 - Sensex clock is thin: 39/48 three-month fits degenerate. Never read Sensex weights below a regime.
+- Short straddle hedge holds +straddle_delta. A -delta hedge passed 23 tests (all mean checks are
+  sign-blind). Any hedging change: hedged sd must fall like m^-1/2 (test_sim). D-25.
+- Mean P&L is exactly 0 on every grid (martingale spot, equal entry). The clock lives in dispersion:
+  floor 12.17 pts, closed form in src/sim/continuous_hedge.py. Discrete EKJS sum is a proxy bias. D-27.
+- An expiry counts only if its series is quoted on its own session; exchanges re-date contracts
+  (NIFTY 2025-09-25 -> 09-30). estimate.fit refuses rank-deficient designs. D-26, D-31a.
+- A2a ignores futures settles with <5 trades (adopted post hoc after Bankex failed; D-31).
+- Changing src/config.py changes config_hash: rerun sensitivity + heston_robustness or A8 fails.
+- Bankex has one liquid maturity per date: options clock unidentifiable, all fits refused.
 - Dates: naive IST, never localised. Any date from memory is wrong until measured (D-02).
