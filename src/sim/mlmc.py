@@ -10,8 +10,8 @@ and estimates each term with its own sample. When level ``l`` and level ``l - 1`
 same Brownian path, ``Y_l = P_l - P_(l-1)`` is small and needs few samples. Three rates decide the
 cost: ``|E[Y_l]| ~ 2^(-alpha l)`` (bias), ``Var[Y_l] ~ 2^(-beta l)`` (variance),
 ``C_l ~ 2^(gamma l)`` (cost). For a target RMSE ``eps`` MLMC costs ``eps^-2`` when beta > gamma,
-``eps^-2 log(eps)^2`` when beta == gamma, ``eps^-(2 + (gamma - beta)/alpha)`` otherwise; single-level MC costs
-``eps^-(2 + gamma/alpha)``.
+``eps^-2 log(eps)^2`` when beta == gamma, ``eps^-(2 + (gamma - beta)/alpha)`` otherwise;
+single-level MC costs ``eps^-(2 + gamma/alpha)``.
 
 A sampler is ``sampler(level, n, rng) -> (fine, coarse)``: ``n`` iid samples of each quantity on
 ``level`` and on ``level - 1``, from the same randomness, each shaped ``(n, q)``. At level 0 the

@@ -50,6 +50,29 @@ def test_mlmc_recovers_closed_form_on_toy() -> None:
     assert est.se < 0.03 / np.sqrt(2) * 1.2, "allocation must meet the variance half of the budget"
 
 
+@pytest.mark.parametrize("alpha", [1.0, 2.0])
+def test_richardson_tail_and_its_se_are_exact(alpha: float) -> None:
+    """Deterministic levels: ``Y_0 = 1``, ``Y_l = r^l`` with ``r = 2^-alpha``, plus a +/-s pattern
+    of known variance. The limit must be the geometric sum ``1 / (1 - r)`` to rounding, and its se
+    must count level L's variance ``(2^alpha / (2^alpha - 1))^2`` times. A missing tail misses the
+    limit by ``r^(L+1) / (1 - r)`` (0.03 at alpha = 1), a wrong-sign tail by twice that."""
+    r, n_levels, n, s = 2.0**-alpha, 6, 10, 0.1
+    pattern = s * np.where(np.arange(n) % 2 == 0, 1.0, -1.0)[:, None]
+    levels = []
+    for level in range(n_levels):
+        p_l = (1.0 - r ** (level + 1)) / (1.0 - r)
+        p_prev = (1.0 - r**level) / (1.0 - r)
+        lev = mlmc.Level(level, 2.0**level)
+        lev.add(np.full((n, 1), p_l) + pattern, np.full((n, 1), p_prev), 0.0)
+        levels.append(lev)
+    est = mlmc.estimate(levels, alpha=alpha)
+    assert est.limit == pytest.approx(1.0 / (1.0 - r), abs=1e-12)
+    var_y = s**2 * n / (n - 1)
+    inflate = (2.0**alpha / (2.0**alpha - 1.0)) ** 2
+    assert est.limit_se == pytest.approx(np.sqrt((n_levels - 1 + inflate) * var_y / n), rel=1e-9)
+    assert mlmc.estimate(levels).alpha == pytest.approx(alpha, abs=1e-9)
+
+
 def test_optimal_samples_spend_half_the_mse_budget() -> None:
     variances = np.array([50.0, 20.0, 9.0, 4.0, 1.5])
     costs = 2.0 ** np.arange(5)
@@ -84,8 +107,10 @@ def test_riemann_moment_converges_to_floor_at_rate_one() -> None:
 
 
 @pytest.mark.parametrize("believer", ["clock", "calendar"])
-def test_rate_constant_matches_adaptive_quadrature(believer: str) -> None:
-    """Same integrand, integrated by QUADPACK in t per session instead of Gauss-Legendre in u."""
+def test_rate_constant_quadrature_is_converged(believer: str) -> None:
+    """Same closed-form integrand, integrated by QUADPACK in t per session instead of Gauss-Legendre
+    in u. This checks the quadrature, not the formula; the formula's checks are the simulated
+    hedges below."""
     w, sigma, strike = hl.WEIGHTS, hl.SIGMA, hl.SPOT
     cum = np.concatenate([[0.0], np.cumsum(w)])
     total = sigma**2 * cum[-1]
@@ -137,15 +162,17 @@ def test_uniform_clock_has_no_floor() -> None:
     assert ch.rate_constant(flat, hl.SIGMA, hl.SPOT, "calendar") == pytest.approx(clock, rel=1e-12)
 
 
-def test_difference_constant_matches_simulated_gap() -> None:
-    """``m E[(diff_m - I_m)^2]`` at m = 16 against the leading-order constant: the hedge
-    difference converges to the EKJS sum pathwise, at the predicted rate constant."""
+@pytest.mark.parametrize(("column", "believer"), [("gap", "difference"), ("cal_gap", "calendar")])
+def test_noise_constants_match_simulated_gap(column: str, believer: str) -> None:
+    """``m E[(P&L_m - I_m)^2]`` at m = 16 against the leading-order constant, for the hedge
+    difference and for the calendar trader alone: both converge to the EKJS sum pathwise, at the
+    predicted rate constant. (Measured at m = 16: 15.45 against 15.15, 138.0 against 138.8.)"""
     level = 4
     fine, _ = hl.sample_level(level, 10_000, np.random.default_rng(13))
-    col = fine[:, hl.COLUMNS.index("gap")]
+    col = fine[:, hl.COLUMNS.index(column)]
     c_sim = np.sqrt(2**level * col.mean())
     c_se = c_sim * col.std(ddof=1) / np.sqrt(col.size) / (2 * col.mean())
-    c_cf = ch.rate_constant(hl.WEIGHTS, hl.SIGMA, hl.SPOT, "difference")
+    c_cf = ch.rate_constant(hl.WEIGHTS, hl.SIGMA, hl.SPOT, believer)
     assert abs(c_sim - c_cf) < 0.03 * c_cf + 4 * c_se
 
 

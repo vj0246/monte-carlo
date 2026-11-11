@@ -24,8 +24,9 @@ that is ``c^2 / m`` with (Bertsimas, Kogan and Lo 2000)
     E[g^2] = K^2 n((R + V)/2; 0, V + R/2) / (2 sqrt(pi R)).
 
 ``g`` uses the hedger's believed remaining variance, the noise uses the true per-step variance.
-For a straddle ``E[g^2]`` blows up like ``R^-1/2`` at expiry, which is integrable, so the ``m^-1/2``
-rate survives the kink in the payoff (Gobet and Temam 2001 show it does for Lipschitz payoffs).
+For a straddle ``E[g^2]`` blows up like ``R^-1/2`` at expiry, which is integrable, so ``c`` is
+finite despite the kink in the payoff. That the ``m^-1/2`` rate itself survives the kink is taken
+from measurement, not from a theorem: ``sqrt(m E[clock_m^2])`` is flat in ``m`` (D-25, D-27).
 
 Time ``t`` is measured in sessions, ``w`` holds the per-session clock weights, ``sigma`` is the
 per-session volatility, and the strike is the entry spot (``x_0 = 0``). Both integrands carry an

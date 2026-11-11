@@ -6,7 +6,7 @@ pathwise EKJS integral ``I = int 0.5 S^2 Gamma_flat (dV_flat - dV_true)``, whose
 deviation ``F`` is a floor no hedging frequency removes. This module puts numbers on that sentence:
 
 - ``F``, the floor, as ``sqrt(lim E[diff_m^2])`` (the mean is exactly zero on every grid, D-25);
-- ``c`` for the clock trader, and the matching constant for the calendar trader's excess over ``F``;
+- ``c`` for the clock trader, and ``c_cal = sqrt(m (E[cal_m^2] - F^2))`` for the calendar trader;
 - the crossover ``m* = (c / F)^2`` beyond which the clock, not the rebalancing, is the larger risk.
 
 **Why MLMC.** ``E[diff_m^2]`` approaches ``F^2`` at rate ``1/m``, so reaching the limit means a fine
@@ -15,15 +15,12 @@ session. GBM is simulated exactly, so the coarse path is the fine path at every 
 same Brownian path, an exact coupling, and ``Var[diff_l^2 - diff_(l-1)^2]`` falls like ``2^-l``.
 
 **Why MLMC does not pay here, and what does.** That ``2^-l`` only matches the cost growth ``2^l``
-(beta = gamma, Giles' boundary case, approached from below: the fit over the levels run is under
-one), and its constant is large: the difference's own hedging noise
-around ``I`` has rate constant ``c_diff`` above ``F`` (``m*_diff = (c_diff / F)^2`` is under two
-hedges a session), so a coarse level predicts the fine one poorly and ``V_l C_l`` is flat in ``l``.
-At this ``L`` single-level MC is cheaper. The EKJS sum on the same path is the right tool instead: a
-control variate whose mean ``E[I_m^2]`` is known exactly (``continuous_hedge``), which leaves only
-``E[diff^2 - I^2]`` to estimate. The table reports all three costs; the MLMC run is kept because its
-levels are the sd-against-``m`` curve, and because ``lim E[diff^2 - I^2] = 0`` is itself the test
-that the hedge's limit is the EKJS integral.
+(beta = gamma, Giles' boundary case, approached from below), and its constant is large: the
+difference's own noise around ``I`` has rate constant ``c_diff`` above ``F``, so a coarse level
+predicts the fine one poorly and ``V_l C_l`` is flat in ``l``. Single-level MC is cheaper. The EKJS
+sum on the same path is the right tool: a control variate whose mean ``E[I_m^2]`` is known exactly
+(``continuous_hedge``). The MLMC run is kept for its levels, the sd-against-``m`` curve, and because
+``lim E[diff^2 - I^2] = 0`` is the test that the hedge's limit is the EKJS integral.
 
 **Why only the floor is telescoped.** The clock and calendar columns ride along on the same paths,
 but their constants come from each level's own fine sample. Telescoping a quantity that tends to
@@ -32,8 +29,12 @@ level-8 value of ``c^2 / 256``.
 
 **Checks.** The floor is estimated four ways that share no code path beyond the GBM simulator: the
 hedge (MLMC), the EKJS sum on the same paths (MLMC), the EKJS sum on a fine grid with an independent
-seed, and the Gaussian-kernel closed form of ``src.sim.continuous_hedge``. The rate constants are
-checked against that module's leading-order formula.
+seed, and the Gaussian-kernel closed form of ``src.sim.continuous_hedge``, which is the number to
+quote; the simulations confirm it. Three rate constants are checked against that module's leading
+order: the clock trader's, and the noise of the difference and of the calendar trader around
+``I_m``. ``c_cal`` itself has no closed form here: ``E[cal^2] - F^2`` also carries
+``2 E[I_m (cal - I_m)]``, a cross term of the same order ``1/m`` that the noise formula lacks, so it
+is measured, not predicted.
 
 Run:  uv run python -m src.experiment.hedging_limit
 """
@@ -41,6 +42,7 @@ Run:  uv run python -m src.experiment.hedging_limit
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -61,7 +63,11 @@ EKJS_PER_SESSION = 256
 EKJS_PAIRS = 200_000
 CHUNK = 10_000_000  # path-array elements per simulate call (80 MB), to stay well inside memory
 
-COLUMNS = ("diff", "clock", "calendar", "ekjs", "cv", "gap")
+COLUMNS = ("diff", "clock", "calendar", "ekjs", "cv", "gap", "cal_gap", "cal_cross")
+SOURCES = tuple(Path("src") / f for f in (
+    "experiment/hedging_limit.py", "sim/mlmc.py", "sim/continuous_hedge.py", "sim/engine.py",
+    "sim/analytic.py",
+))  # digested into the manifest, so a table made from an uncommitted tree is still traceable
 SIGMA = ANNUAL_VOL / np.sqrt(SESSIONS_PER_YEAR)
 WEIGHTS = np.array([TUE_REGIME[d] for d in SESSION_ORDER])
 WEIGHTS = WEIGHTS / WEIGHTS.mean()
@@ -82,20 +88,23 @@ def _pair_mean(x: np.ndarray) -> np.ndarray:
 
 def squares(paths: np.ndarray, per_session: int) -> np.ndarray:
     """Per path: ``diff^2, clock^2, calendar^2, I_m^2``, hedging ``per_session`` times a session,
-    then ``diff^2 - I_m^2`` and ``(diff - I_m)^2``.
+    then ``diff^2 - I_m^2``, ``(diff - I_m)^2``, ``(cal - I_m)^2`` and ``2 I_m (cal - I_m)``.
 
     The first four are second moments equal to variances, because every mean is exactly zero
     (D-25). ``cv`` is the hedge's second moment with the EKJS sum as a control variate: ``E[I_m^2]``
     is known exactly on every grid, so only ``E[cv]`` has to be estimated. ``gap`` is the pathwise
     distance of the hedge difference from the EKJS sum, which should fall like
-    ``continuous_hedge.rate_constant(..., "difference")^2 / m``.
+    ``continuous_hedge.rate_constant(..., "difference")^2 / m``; ``cal_gap`` is the same for the
+    calendar trader, and ``cal_cross`` the cross term that keeps ``E[cal^2] - F^2`` off its noise.
     """
     truth, flat = believed_paths(WEIGHTS, per_session)
     clock = hedge_short_straddle(paths, SPOT, SIGMA**2 * _remaining(truth), ENTRY, 0.0)
     calendar = hedge_short_straddle(paths, SPOT, SIGMA**2 * _remaining(flat), ENTRY, 0.0)
     ekjs = ekjs_pathwise(paths, SPOT, SIGMA**2 * truth, SIGMA**2 * flat)
     diff = calendar - clock
-    columns = (diff**2, clock**2, calendar**2, ekjs**2, diff**2 - ekjs**2, (diff - ekjs) ** 2)
+    noise = calendar - ekjs
+    columns = (diff**2, clock**2, calendar**2, ekjs**2, diff**2 - ekjs**2, (diff - ekjs) ** 2,
+               noise**2, 2.0 * ekjs * noise)
     return np.column_stack(columns)
 
 
@@ -149,22 +158,16 @@ def level_table(levels: list[mlmc.Level]) -> pl.DataFrame:
     for lev in levels:
         exact = continuous_hedge.riemann_second_moment(WEIGHTS, SIGMA, SPOT, 2**lev.level)
         for j, name in enumerate(COLUMNS):
-            rows.append(
-                {
-                    "level": lev.level,
-                    "hedges_per_session": 2**lev.level,
-                    "quantity": name,
-                    "n_pairs": lev.n,
-                    "cost_per_sample": lev.cost,
-                    "seconds": lev.seconds,
-                    "mean_p": float(lev.mean("fine")[j]),
-                    "exact_p": exact if name == "ekjs" else float("nan"),
-                    "se_p": float(np.sqrt(lev.var("fine")[j] / lev.n)),
-                    "sd": float(np.sqrt(lev.mean("fine")[j])) if name != "cv" else float("nan"),
-                    "mean_y": float(lev.mean("y")[j]),
-                    "var_y": float(lev.var("y")[j]),
-                }
-            )
+            mean_p = float(lev.mean("fine")[j])
+            rows.append({
+                "level": lev.level, "hedges_per_session": 2**lev.level, "quantity": name,
+                "n_pairs": lev.n, "cost_per_sample": lev.cost, "seconds": lev.seconds,
+                "mean_p": mean_p, "exact_p": exact if name == "ekjs" else float("nan"),
+                "se_p": float(np.sqrt(lev.var("fine")[j] / lev.n)),
+                # an sd only where P is the square of a P&L
+                "sd": float(np.sqrt(mean_p)) if j < 4 else float("nan"),
+                "mean_y": float(lev.mean("y")[j]), "var_y": float(lev.var("y")[j]),
+            })
     return pl.DataFrame(rows)
 
 
@@ -242,8 +245,17 @@ def summary(levels: list[mlmc.Level], ekjs_fine: tuple[float, float]) -> pl.Data
     cal_p, cal_se = _fine(top, "calendar")
     c_cal, c_cal_se = _root(cal_p - est.limit, np.hypot(cal_se, est.limit_se), m_top)
     c_cal_cf = continuous_hedge.rate_constant(WEIGHTS, SIGMA, SPOT, "calendar")
-    add("c_calendar", f"sqrt(m (E[cal^2] - F^2)) at m={m_top}", c_cal, c_cal_se, pts)
-    add("c_calendar", "closed form, leading order (noise only)", c_cal_cf, unit=pts)
+    add("c_calendar", f"sqrt(m (E[cal^2] - F^2)) at m={m_top}, no closed form", c_cal, c_cal_se,
+        pts)
+    # c_cal^2 = noise^2 + cross + m (E[I_m^2] - F^2): the last is the exact Riemann bias.
+    c_noise = _root(*_fine(top, "cal_gap"), m_top)
+    add("c_cal_noise", f"sqrt(m E[(cal - I)^2]) at m={m_top}", *c_noise, pts)
+    add("c_cal_noise", "closed form, leading order", c_cal_cf, unit=pts)
+    cross, cross_se = _fine(top, "cal_cross")
+    add("cal_cross", f"m E[2 I (cal - I)] at m={m_top}", m_top * cross, m_top * cross_se,
+        "points^2")
+    add("cal_riemann", f"m (E[I_m^2] - F^2) at m={m_top}, exact", m_top * (exact_top - closed**2),
+        unit="points^2")
 
     # The difference's own noise around I: what keeps Var[Y_l] large at every level.
     c_diff_cf = continuous_hedge.rate_constant(WEIGHTS, SIGMA, SPOT, "difference")
@@ -256,7 +268,6 @@ def summary(levels: list[mlmc.Level], ekjs_fine: tuple[float, float]) -> pl.Data
     add("m_star_clock", "(c/F)^2, closed forms", (c_clock_cf / closed) ** 2, unit=per)
     add("m_star_calendar", "(c/F)^2, mlmc", (c_cal / floor) ** 2,
         _ratio_se(c_cal, c_cal_se, floor, floor_se), per)
-    add("m_star_calendar", "(c/F)^2, closed forms", (c_cal_cf / closed) ** 2, unit=per)
     add("m_star_difference", "(c/F)^2, closed forms", (c_diff_cf / closed) ** 2, unit=per)
 
     # Economic units. Vega per vol point by central difference on the annual vol.
@@ -266,8 +277,8 @@ def summary(levels: list[mlmc.Level], ekjs_fine: tuple[float, float]) -> pl.Data
     vega = (price(ANNUAL_VOL + 1e-4) - price(ANNUAL_VOL - 1e-4)) / 2e-4 / 100.0
     add("entry_premium", "Black-Scholes, 13% vol, 5 sessions", ENTRY, unit=pts)
     add("vega", "per vol point", vega, unit="points per vol point")
-    add("floor_pct_premium", "mlmc floor / entry", 100 * floor / ENTRY, 100 * floor_se / ENTRY, "%")
-    add("floor_vol_points", "mlmc floor / vega", floor / vega, floor_se / vega, "vol points")
+    add("floor_pct_premium", "closed-form floor / entry", 100 * closed / ENTRY, unit="%")
+    add("floor_vol_points", "closed-form floor / vega", closed / vega, unit="vol points")
     return pl.DataFrame(rows).with_columns(pl.col("value", "se").cast(pl.Float64))
 
 
@@ -286,21 +297,18 @@ def main(cfg: Settings = settings) -> None:
     for name, table in (("mlmc_levels", levels_df), ("hedging_limit", summary_df)):
         path = cfg.tables_dir / f"{name}.parquet"
         table.write_parquet(path)
-        write_manifest(path, manifest(f"hedging limit: {name}", cfg, seed=SEED, extra=extra))
+        info = manifest(f"hedging limit: {name}", cfg, seed=SEED, inputs=SOURCES, extra=extra)
+        write_manifest(path, info)
         logging.info("wrote %s (%d rows)", path, table.height)
 
     shown = levels_df.filter(pl.col("quantity").is_in(["diff", "clock", "calendar"]))
-    for row in shown.iter_rows(named=True):
-        logging.info(
-            "l=%d m=%-4d %-9s n=%-8d sd %8.3f  E[Y] %+10.4f  V[Y] %12.4g  %.1fs",
-            row["level"], row["hedges_per_session"], row["quantity"], row["n_pairs"], row["sd"],
-            row["mean_y"], row["var_y"], row["seconds"],
-        )
-    for row in summary_df.iter_rows(named=True):
-        logging.info(
-            "%-18s %-44s %12.4f +/- %-8.4f %s",
-            row["name"], row["method"], row["value"], row["se"], row["unit"],
-        )
+    for r in shown.iter_rows(named=True):
+        logging.info("l=%d m=%-4d %-9s n=%-8d sd %8.3f  E[Y] %+10.4f  V[Y] %12.4g  %.1fs",
+                     r["level"], r["hedges_per_session"], r["quantity"], r["n_pairs"], r["sd"],
+                     r["mean_y"], r["var_y"], r["seconds"])
+    for r in summary_df.iter_rows(named=True):
+        logging.info("%-18s %-50s %12.4f +/- %-8.4f %s",
+                     r["name"], r["method"], r["value"], r["se"], r["unit"])
 
 
 if __name__ == "__main__":
