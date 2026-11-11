@@ -13,8 +13,8 @@ the same scheme in law, and it is the one the tests check against the Fourier pr
 
 **Antithetics are kept as a measured negative.** An ATM straddle is nearly even in the spot normal,
 so mirrored pairs are positively correlated and the pair mean is worse than two independent draws:
-efficiency 0.2 to 0.5 of plain on the straddles in ``mc_efficiency.parquet``. D-14 prescribed them
-for terminal pricing; for this payoff that was wrong.
+efficiency 0.47 to 0.67 of plain in ``mc_efficiency.parquet``, almost all of it variance. D-14
+prescribed them for terminal pricing; for this payoff that was wrong.
 
 **Conditional Monte Carlo** (Willard 1997; Romano and Touzi 1997). Split ``dW1 = rho dW2 +
 sqrt(1 - rho^2) dB``. Given the variance path, the ``dB`` part is Gaussian, so
@@ -26,9 +26,9 @@ and the straddle is ``E[ Black76(F exp(rho I - 0.5 rho^2 V), K, (1 - rho^2) V) ]
 integrated out exactly. On the grid this is the conditional expectation of the plain estimator, so
 the two share every discretisation bias and differ only in variance.
 
-**Control variates.** Linear controls in ``V`` and ``I`` were tried first and left 86% of the
-variance at ``rho = -0.6, xi = 0.5``: the conditional straddle is even in ``rho I``, so its dependence
-on ``I`` is quadratic and a linear control cannot see it. The control used is the same conditional price in the frozen-variance (GBM) model,
+**Control variates.** A linear control in ``I`` cannot work: the conditional straddle is even in
+``rho I``, so its dependence on ``I`` is quadratic and its linear projection on ``I`` is near zero.
+The control used is the same conditional price in the frozen-variance (GBM) model,
 driven by the same normals: ``J = sum sqrt(w theta dt) z`` replaces ``I`` and ``theta * sum(w) dt``
 replaces ``V``. ``rho J`` is exactly Gaussian, so this control's mean is exactly Black-76 at total
 variance ``theta * sum(w) dt``, on the grid. At ``rho = 0`` it is a constant, so ``V`` (whose mean
@@ -140,7 +140,18 @@ def normals(source: str, n_paths: int, dims: int, seed: int) -> np.ndarray:
     return rng.standard_normal((n_paths, dims))
 
 
-def estimate(
+def path_values(
+    plain: bool, big_v: np.ndarray, big_i: np.ndarray, big_g: np.ndarray, p: HestonParams, fwd: float
+) -> np.ndarray:
+    """Per-path ATM straddle: the payoff, or (``plain=False``) its expectation given the variance path."""
+    if plain:
+        x = -0.5 * big_v + p.rho * big_i + np.sqrt(1.0 - p.rho**2) * big_g
+        return np.abs(fwd * np.exp(x) - fwd)
+    shifted = fwd * np.exp(p.rho * big_i - 0.5 * p.rho**2 * big_v)
+    return straddle_price(shifted, fwd, (1.0 - p.rho**2) * big_v)
+
+
+def samples(
     method: str,
     legs: tuple[tuple[int, float], ...],
     p: HestonParams,
@@ -149,8 +160,10 @@ def estimate(
     fwd: float,
     n_paths: int,
     seed: int,
-) -> float:
-    """Price of ``sum sign * straddle(expiry)`` over ``legs = ((expiry_step, sign), ...)``, ATM."""
+) -> np.ndarray:
+    """Units whose mean is the price of ``sum sign * straddle(expiry)`` over ``legs = ((expiry_step,
+    sign), ...)``, ATM: per-path values, pair means for antithetics, control-adjusted values for the
+    CV. Pseudo-random units are independent; Sobol units are not, so only their mean means anything."""
     source, evaluation, use_controls = METHODS[method]
     n_steps = step_weights.size
     plain = evaluation == "payoff"
@@ -166,23 +179,34 @@ def estimate(
     controls = np.zeros((n_paths, 2))
     control_mean = np.zeros(2)
     for expiry, sign in legs:
-        big_v, big_i, big_g = by_expiry[expiry]
-        if plain:
-            x = -0.5 * big_v + p.rho * big_i + np.sqrt(1.0 - p.rho**2) * big_g
-            values += sign * np.abs(fwd * np.exp(x) - fwd)
-        else:
-            shifted = fwd * np.exp(p.rho * big_i - 0.5 * p.rho**2 * big_v)
-            values += sign * straddle_price(shifted, fwd, (1.0 - p.rho**2) * big_v)
+        values += sign * path_values(plain, *by_expiry[expiry], p, fwd)
         if use_controls:
             frozen = p.theta * dt * step_weights[:expiry]
             big_j = z_var[:, :expiry] @ np.sqrt(frozen)
             gbm_fwd = fwd * np.exp(p.rho * big_j - 0.5 * p.rho**2 * frozen.sum())
             controls[:, 0] += sign * straddle_price(gbm_fwd, fwd, (1.0 - p.rho**2) * frozen.sum())
-            controls[:, 1] += sign * big_v
+            controls[:, 1] += sign * by_expiry[expiry][0]
             control_mean += sign * np.array(
                 [straddle_price(fwd, fwd, frozen.sum()), expected_v(p, step_weights, dt, expiry)]
             )
-    if not use_controls:
-        return float(values.mean())
-    beta, *_ = np.linalg.lstsq(controls - controls.mean(axis=0), values - values.mean(), rcond=None)
-    return float(values.mean() - (controls.mean(axis=0) - control_mean) @ beta)
+    if use_controls:
+        beta, *_ = np.linalg.lstsq(controls - controls.mean(axis=0), values - values.mean(), rcond=None)
+        values = values - (controls - control_mean) @ beta
+    if source == "antithetic":
+        half = n_paths // 2
+        values = 0.5 * (values[:half] + values[half:])
+    return values
+
+
+def estimate(
+    method: str,
+    legs: tuple[tuple[int, float], ...],
+    p: HestonParams,
+    step_weights: np.ndarray,
+    dt: float,
+    fwd: float,
+    n_paths: int,
+    seed: int,
+) -> float:
+    """Price of ``sum sign * straddle(expiry)`` over ``legs``, ATM; see ``samples``."""
+    return float(samples(method, legs, p, step_weights, dt, fwd, n_paths, seed).mean())

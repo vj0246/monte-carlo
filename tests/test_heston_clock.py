@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from scipy.integrate import solve_ivp
 
-from src.experiment.heston_entry import correction
+from src.experiment.heston_entry import approx_price, correction
 from src.experiment.heston_robustness import simulate_clocked
 from src.sim import heston, heston_clock, terminal_mc
 from src.sim.engine import straddle_price
@@ -58,6 +58,28 @@ def test_closed_form_matches_numerical_riccati() -> None:
     assert np.abs(heston_clock.char_fn(u, p, SIX_SESSIONS, DT) - numerical).max() < 1e-9
 
 
+def test_closed_form_has_no_branch_jump_at_the_integration_cut() -> None:
+    """Near ``u = 40/sd`` (6249 on one Monday session) the char fn is ~1e-19, below any absolute
+    tolerance on ``phi``, so compare the exponent ``A + B v0``. A wrong branch of the complex log
+    would shift ``A`` by ``4 pi i kappa theta / xi^2``, 0.66i here."""
+    p = params(-0.9, 0.8)
+    w = 0.611
+    u = np.array([1500.0 - 0.5j, 6000.0 - 0.5j])
+
+    def rhs(_tau: float, y: np.ndarray) -> np.ndarray:
+        b = y[len(u):]
+        db = (0.5 * w * (-(u**2) - 1j * u) + (p.rho * p.xi * np.sqrt(w) * 1j * u - p.kappa) * b
+              + 0.5 * p.xi**2 * b**2)
+        return np.concatenate([p.kappa * p.theta * b, db])
+
+    y = solve_ivp(rhs, (0.0, DT), np.zeros(2 * len(u), dtype=complex), method="DOP853",
+                  rtol=1e-12, atol=1e-12).y[:, -1]
+    a, b = heston_clock.riccati_piece(u, np.zeros_like(u), np.zeros_like(u), w, DT, p)
+    exponent = a + b * p.v0
+    assert exponent.real.min() < -40  # the far node really is where |phi| < 1e-17
+    assert np.abs(exponent - (y[: len(u)] + y[len(u):] * p.v0)).max() < 1e-8 * np.abs(exponent).max()
+
+
 @pytest.mark.parametrize("weights", [np.array([0.611]), TWO_SESSIONS, SIX_SESSIONS])
 def test_vanishing_vol_of_vol_is_black76(weights: np.ndarray) -> None:
     """``xi = 1e-3``: the true gap is ``~xi^2 T / (24 theta)`` relative, 1e-8; smaller xi only adds
@@ -90,6 +112,33 @@ def test_clocked_qe_simulation_matches_fourier(weights: np.ndarray) -> None:
     se = payoff.std(ddof=1) / np.sqrt(payoff.size)
     exact = heston_clock.straddle_price(FWD, FWD, weights, DT, p)
     assert abs(payoff.mean() - exact) < 3 * se
+
+
+def test_spread_prediction_tracks_the_exact_spread() -> None:
+    """Leg by leg the expansion must carry the spread's stochastic-vol correction within 10%."""
+    p = params(-0.9, 0.8)
+    exact = (heston_clock.straddle_price(FWD, FWD, SIX_SESSIONS, DT, p)
+             - heston_clock.straddle_price(FWD, FWD, SIX_SESSIONS[:1], DT, p))
+    black = (straddle_price(FWD, FWD, THETA * DT * SIX_SESSIONS.sum())
+             - straddle_price(FWD, FWD, THETA * DT * SIX_SESSIONS[0]))
+    got = approx_price(SIX_SESSIONS, p, near=1)  # priced at SPOT = FWD = 25000
+    assert got / black - 1 == pytest.approx(exact / black - 1, rel=0.1)
+
+
+def test_conditional_mc_is_rao_blackwell_on_shared_variance_paths() -> None:
+    """On one variance path the conditional value is the payoff's expectation over the spot noise:
+    same mean, and no more variance, at the parameters where the efficiency table once said otherwise."""
+    for rho, xi in ((-0.6, 0.5), (-0.9, 0.8)):
+        p = params(rho, xi)
+        step_weights = np.repeat(TWO_SESSIONS, 8)
+        rng = np.random.default_rng(11)
+        z_var, z_spot = rng.standard_normal((2, 2**15, 16))
+        legs = terminal_mc.integrals(p, step_weights, DT / 8, z_var, z_spot, (16,))[16]
+        plain = terminal_mc.path_values(True, *legs, p, FWD)
+        conditional = terminal_mc.path_values(False, *legs, p, FWD)
+        assert conditional.var() < plain.var()
+        diff = plain - conditional
+        assert abs(diff.mean()) < 4 * diff.std() / np.sqrt(diff.size)
 
 
 def test_pca_increments_are_orthogonal() -> None:

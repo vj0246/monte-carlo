@@ -31,10 +31,15 @@ consequences, both falsifiable by the table:
    ``xi = 0.5``) and by far more on Fri, whose span is the heaviest session followed by the lightest
    (+0.13 pp). The rough guess written here first, "hundredths of a pp everywhere", was right for
    the week and wrong by a factor of ten for Fri; the ``predicted_error`` column is the formula
-   itself, evaluated per product, and that is what the table tests.
+   itself, evaluated per product (the spread leg by leg), and that is what the table tests.
 
 **Monte Carlo at equal cost.** The same prices by six estimators (``src.sim.terminal_mc``), scored
-against Fourier: RMSE against ``n``, its log-log slope, and efficiency ``1 / (variance x seconds)``.
+against Fourier: RMSE against ``n`` over ``MC_REPS`` seeds, and its log-log slope. Efficiency,
+``1 / (variance x seconds)``, needs better numbers than 16 seeds give: a variance from 16 draws has
+a 37% relative SE, and one wall-clock reading moved by a third between runs. So the cost is the
+fastest of ``TIMING_REPEATS`` runs of ``BIG_PATHS`` paths, and for the pseudo-random methods the
+variance is read off the i.i.d. units of those same runs. RQMC's units are not independent, so its
+variance stays the spread over its randomisations, the only honest error bar it has.
 
 Run:  uv run python -m src.experiment.heston_entry
 """
@@ -67,6 +72,8 @@ MC_CELLS = ((-0.6, 0.5), (-0.9, 0.8))
 MC_PRODUCTS = ("Mon", "Fri", "spread_Mon")
 MC_PATHS = tuple(2**k for k in range(10, 16))
 MC_REPS = 16
+BIG_PATHS = 2**17
+TIMING_REPEATS = 3
 MC_STEPS_PER_SESSION = 8
 BIAS_STEPS_PER_SESSION = (1, 2, 4, 8, 16)
 SEED = 29
@@ -106,6 +113,15 @@ def correction(weights: np.ndarray, p: HestonParams, per_session: int = 64) -> f
     return 1 + k3 / (12 * m) + (k3**2 / m**3 - k4 / m**2) / 24
 
 
+def approx_price(weights: np.ndarray, p: HestonParams, near: int = 0) -> float:
+    """``price`` with each leg's Heston correction replaced by ``correction``. The near leg of a
+    spread is a straddle on its own pieces (``v0 = theta``), so the factor applies leg by leg."""
+    def one(w: np.ndarray) -> float:
+        return correction(w, p) * straddle_price(SPOT, SPOT, THETA * DT * float(w.sum()))
+
+    return one(weights) - (one(weights[:near]) if near else 0.0)
+
+
 def products() -> dict[str, tuple[np.ndarray, int]]:
     """name -> (clock weights, near-leg length; 0 for a plain straddle)."""
     out = {day: (clock(SPANS[day]), 0) for day in OPENED}
@@ -128,9 +144,7 @@ def entry_errors() -> pl.DataFrame:
             for name, (weights, near) in products().items():
                 flat = np.ones_like(weights)
                 clock_price, flat_price = price(weights, p, near), price(flat, p, near)
-                predicted = np.nan
-                if not near:  # the expansion is for one straddle, not a difference of two
-                    predicted = (1 + gbm[name]) * correction(weights, p) / correction(flat, p) - 1
+                predicted = approx_price(weights, p, near) / approx_price(flat, p, near) - 1
                 rows.append({"rho": rho, "xi": xi, "product": name, "sessions": weights.size,
                              "clock_price": clock_price, "flat_price": flat_price,
                              "error": clock_price / flat_price - 1, "gbm_error": gbm[name],
@@ -142,28 +156,78 @@ def entry_errors() -> pl.DataFrame:
     )
 
 
-def mc_run(p: HestonParams, name: str, method: str, n_paths: int, per_session: int, reps: int,
-           exact: float) -> dict:
+def legs_of(name: str, per_session: int) -> tuple[np.ndarray, tuple[tuple[int, float], ...]]:
     weights, near = products()[name]
     step_weights = np.repeat(weights, per_session)
-    legs = ((step_weights.size, 1.0),) + (((near * per_session, -1.0),) if near else ())
-    start = time.perf_counter()
+    return step_weights, ((step_weights.size, 1.0),) + (((near * per_session, -1.0),) if near else ())
+
+
+def mc_run(p: HestonParams, name: str, method: str, n_paths: int, per_session: int, reps: int,
+           exact: float) -> dict:
+    step_weights, legs = legs_of(name, per_session)
     est = np.array([
         terminal_mc.estimate(method, legs, p, step_weights, DT / per_session, SPOT, n_paths,
                              SEED + 1000 * per_session + 100 * int(np.log2(n_paths)) + r)
         for r in range(reps)
     ])
-    seconds = (time.perf_counter() - start) / reps
     var = float(est.var(ddof=1))
     return {"rho": p.rho, "xi": p.xi, "product": name, "method": method, "n_paths": n_paths,
             "steps_per_session": per_session, "reps": reps, "exact": exact,
             "bias": float(est.mean() - exact), "bias_se": float(np.sqrt(var / reps)),
-            "sd": float(np.sqrt(var)), "rmse": float(np.sqrt(((est - exact) ** 2).mean())),
-            "seconds": seconds, "efficiency": 1.0 / (var * seconds)}
+            "sd": float(np.sqrt(var)), "rmse": float(np.sqrt(((est - exact) ** 2).mean()))}
+
+
+def mc_cost(p: HestonParams, name: str, method: str) -> dict:
+    """Seconds per path, and for pseudo-random methods variance per path, from big runs.
+
+    Seconds are the fastest of ``TIMING_REPEATS`` runs: other processes only ever add time.
+    ``path_variance`` is ``n Var(estimate)`` from all runs' independent units pooled, with relative
+    SE ``sqrt((kurtosis - 1) / units)``. NaN for RQMC, whose units are not independent.
+    """
+    step_weights, legs = legs_of(name, MC_STEPS_PER_SESSION)
+    seconds, units = [], []
+    for r in range(TIMING_REPEATS):
+        start = time.perf_counter()
+        units.append(terminal_mc.samples(method, legs, p, step_weights, DT / MC_STEPS_PER_SESSION,
+                                         SPOT, BIG_PATHS, SEED + 10**6 + r))
+        seconds.append(time.perf_counter() - start)
+    pooled = np.concatenate(units)
+    centred = pooled - pooled.mean()
+    unit_var = float((centred**2).mean())
+    pseudo = terminal_mc.METHODS[method][0] != "sobol"
+    return {"rho": p.rho, "xi": p.xi, "product": name, "method": method,
+            "seconds_per_path": min(seconds) / BIG_PATHS,
+            "timing_spread": max(seconds) / min(seconds) - 1,
+            "path_variance": unit_var * BIG_PATHS / units[0].size if pseudo else np.nan,
+            "variance_rel_se": float(np.sqrt(((centred**4).mean() / unit_var**2 - 1) / pooled.size))
+            if pseudo else float(np.sqrt(2 / (MC_REPS - 1)))}
+
+
+def with_efficiency(grid: pl.DataFrame, costs: pl.DataFrame) -> pl.DataFrame:
+    """``1 / (variance x seconds)`` at each ``n``, and its ratio to plain MC with a 95% interval.
+
+    The interval covers the two variance estimates only; ``timing_spread`` reports the clock's noise.
+    """
+    cell = ["rho", "xi", "product", "n_paths"]
+    out = grid.join(costs, on=["rho", "xi", "product", "method"]).with_columns(
+        variance=pl.when(pl.col("path_variance").is_nan()).then(pl.col("sd") ** 2)
+        .otherwise(pl.col("path_variance") / pl.col("n_paths")),
+        seconds=pl.col("seconds_per_path") * pl.col("n_paths"),
+    ).with_columns(efficiency=1 / (pl.col("variance") * pl.col("seconds")))
+    plain = out.filter(pl.col("method") == "plain").select(
+        *cell, plain_eff="efficiency", plain_rse="variance_rel_se")
+    half = 1.96 * (pl.col("variance_rel_se") ** 2 + pl.col("plain_rse") ** 2).sqrt()
+    return (
+        out.join(plain, on=cell)
+        .with_columns(efficiency_vs_plain=pl.col("efficiency") / pl.col("plain_eff"))
+        .with_columns(eff_vs_plain_lo=pl.col("efficiency_vs_plain") * (-half).exp(),
+                      eff_vs_plain_hi=pl.col("efficiency_vs_plain") * half.exp())
+        .drop("plain_eff", "plain_rse")
+    )
 
 
 def mc_efficiency() -> pl.DataFrame:
-    rows = []
+    grid, bias_rows, costs = [], [], []
     for rho, xi in MC_CELLS:
         p = HestonParams(v0=THETA, kappa=KAPPA, theta=THETA, xi=xi, rho=rho)
         for name in MC_PRODUCTS:
@@ -171,28 +235,19 @@ def mc_efficiency() -> pl.DataFrame:
             exact = price(weights, p, near)
             for method in terminal_mc.METHODS:
                 for n_paths in MC_PATHS:
-                    rows.append(mc_run(p, name, method, n_paths, MC_STEPS_PER_SESSION, MC_REPS, exact))
+                    grid.append(mc_run(p, name, method, n_paths, MC_STEPS_PER_SESSION, MC_REPS, exact))
+                costs.append(mc_cost(p, name, method))
                 logging.info("  %s %s %s done", (rho, xi), name, method)
             # Discretisation bias, read off the estimator whose noise is far below it.
             for per_session in (s for s in BIAS_STEPS_PER_SESSION if s != MC_STEPS_PER_SESSION):
-                rows.append(mc_run(p, name, "rqmc_conditional", MC_PATHS[-1], per_session, MC_REPS, exact))
-    table = pl.DataFrame(rows)
-    grid = table.filter(pl.col("steps_per_session") == MC_STEPS_PER_SESSION)
-    slopes = (
-        grid.filter(pl.col("n_paths").is_in(MC_PATHS))
-        .group_by("rho", "xi", "product", "method")
-        .agg(rmse_slope=pl.cov(pl.col("n_paths").log(), pl.col("rmse").log())
-             / pl.col("n_paths").log().var())
+                bias_rows.append(mc_run(p, name, "rqmc_conditional", MC_PATHS[-1], per_session,
+                                        MC_REPS, exact))
+    table = with_efficiency(pl.DataFrame(grid), pl.DataFrame(costs))
+    slopes = table.group_by("rho", "xi", "product", "method").agg(
+        rmse_slope=pl.cov(pl.col("n_paths").log(), pl.col("rmse").log()) / pl.col("n_paths").log().var()
     )
-    plain = grid.filter(pl.col("method") == "plain").select(
-        "rho", "xi", "product", "n_paths", plain_efficiency="efficiency"
-    ).unique(["rho", "xi", "product", "n_paths"])
-    return (
-        table.join(slopes, on=["rho", "xi", "product", "method"], how="left")
-        .join(plain, on=["rho", "xi", "product", "n_paths"], how="left")
-        .with_columns(efficiency_vs_plain=pl.col("efficiency") / pl.col("plain_efficiency"))
-        .drop("plain_efficiency")
-    )
+    table = table.join(slopes, on=["rho", "xi", "product", "method"])
+    return pl.concat([table, pl.DataFrame(bias_rows)], how="diagonal")
 
 
 def main(cfg: Settings = settings) -> None:
@@ -216,14 +271,17 @@ def main(cfg: Settings = settings) -> None:
     efficiency.write_parquet(path)
     write_manifest(path, manifest("terminal MC efficiency against exact Fourier", cfg, seed=SEED, extra={
         **extra, "cells": [list(c) for c in MC_CELLS], "paths": list(MC_PATHS), "reps": MC_REPS,
+        "big_paths": BIG_PATHS, "timing_repeats": TIMING_REPEATS,
         "steps_per_session": MC_STEPS_PER_SESSION, "methods": list(terminal_mc.METHODS)}))
     logging.info("wrote %s", path)
     top = efficiency.filter((pl.col("n_paths") == MC_PATHS[-1])
                             & (pl.col("steps_per_session") == MC_STEPS_PER_SESSION))
     for row in top.iter_rows(named=True):
-        logging.info("%-5.1f %-4.1f %-11s %-17s sd %9.5f rmse %9.5f slope %6.2f eff x%10.1f",
+        logging.info("%-5.1f %-4.1f %-11s %-17s sd %9.5f rmse %9.5f slope %6.2f "
+                     "eff x%8.2f [%8.2f, %8.2f] timing +%3.0f%%",
                      row["rho"], row["xi"], row["product"], row["method"], row["sd"], row["rmse"],
-                     row["rmse_slope"], row["efficiency_vs_plain"])
+                     row["rmse_slope"], row["efficiency_vs_plain"], row["eff_vs_plain_lo"],
+                     row["eff_vs_plain_hi"], 100 * row["timing_spread"])
 
 
 if __name__ == "__main__":
