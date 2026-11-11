@@ -1,8 +1,8 @@
 # What is left
 
-Status (2026-11-11): the planned work is done. Seven of eight acceptance gates pass, A4 is a
-reported null, and A8 is covered by the clean-clone run below. What remains is two decisions only
-you can take, and optional work in order of value.
+Status (2026-11-11): the planned work is done. Every acceptance gate passes except A4, which is a
+reported null; A8 passed on the clean-clone run below. What remains is two decisions only you can
+take, and optional work in order of value.
 
 ---
 
@@ -24,15 +24,13 @@ weekly event. Probably does not overturn the null on its own. About two days.
 
 ---
 
-## 2. Reproducibility (A8)
+## 2. Reproducibility (A8): done
 
-`git clone` into a clean directory, `uv sync`, and the pipeline in README "Run it". The fresh
-`results/tables/*.manifest.json` must carry the cloned commit and the same `config_hash`.
-Attempted 2026-11-11 (script: clone, copy `data/raw`, verify, rerun, compare): the clone at
-`cb6f3cf` built its environment, all 2,000 raw archives matched their MANIFEST sha256, and
-`regime_scan` ran; the run was then stopped for low system memory during `build_panel`.
-Not completed. Rerun on an otherwise idle machine (close Chrome; the surface
-build needs several GB).
+Passed 2026-11-11 from a clean clone in another directory: 2,000/2,000 raw sha256s match, the full
+pipeline reran, 133 tests pass, and the compared tables are bit-identical. It needed one fix
+(`cbf0076`: the config hash no longer includes the checkout path). To repeat it: `git clone`, copy
+`data/raw`, `uv sync`, the pipeline in README "Run it", then compare `results/tables/*.manifest.json`.
+Close Chrome first; the IV surface build needs several GB.
 
 ---
 

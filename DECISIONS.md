@@ -506,7 +506,7 @@ with expiry-day pinning, so it is a project of its own.
 | A5 | Heston MC vs the semi-analytic Fourier price, 20 random parameter sets, fixed seeds | any set outside 3 standard errors plus the D-23 allowance | **pass** |
 | A6 | Exact mean zero on every grid; simulated P&L difference converges pathwise (L2) to the EKJS integral at rate m^-1/2 | either check missed | **pass**; wording corrected in D-23, again in D-25 |
 | A7 | Headline published as a surface over rebalance frequency and cost, with provenance | a single figure is published instead | **pass** (16 cells, clock share 8.4% at 1 hedge/session to 23.8% at 8) |
-| A8 | Provenance complete, config hash stable, seeded runs bit-for-bit reproducible | a manifest is missing or a seeded run differs | **partial**: automated part passes; a clean-clone run on 2026-11-11 verified all 2,000 raw sha256s and reran `regime_scan`, then was killed for low memory in `build_panel` (TO_DO.md) |
+| A8 | Provenance complete, config hash stable, seeded runs bit-for-bit reproducible | a manifest is missing or a seeded run differs | **pass** (2026-11-11): clean clone at `2ee00a1`, 2,000/2,000 raw sha256s match, full pipeline rerun, 133 tests pass, `sensitivity`, `heston_robustness`, `clock_fits` and `atm_variance` bit-identical to the local run; the config hash matched only after `cbf0076` removed the checkout path from it |
 
 **A1 was rewritten.** The original reconciled against exchange-published per-expiry OI totals. NSE
 publishes no such total in the daily archive, so the gate was unrunnable. The replacement compares
@@ -700,6 +700,15 @@ config hash, seed, interpreter and library versions and input digests; the confi
 stored manifest must match the current config; and a seeded simulation is bit-for-bit reproducible.
 The clean-clone run remains a manual step and is listed in TO_DO.md. Calling that gate "passed"
 without the manual step would be a false claim, so the status reads partial.
+
+**Run 2026-11-11, A8 now passes.** A clone at `2ee00a1` in another directory, with the raw
+archives copied and every one checked against its MANIFEST sha256 (2,000 of 2,000), reran the
+pipeline from `regime_scan` to the Heston sweep; 133 tests pass and the four compared tables are
+bit-identical to the local run. It also caught a defect the in-process gate could not: the
+config hash included the absolute `data_root` and `results_root`, so the same configuration in a
+different directory hashed differently. `cbf0076` excludes location fields and tests that a moved
+checkout hashes the same; both trees now give `84a645d40b8a1e7a`. Manifests written before that
+commit carry the old, path-dependent hash.
 
 ---
 

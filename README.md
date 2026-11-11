@@ -94,7 +94,8 @@ driving normal, so a path and its mirror pay almost the same.
 | Figures and report | done (D-33) |
 | Legacy 2023 reader, intraday data | not built; see TO_DO.md |
 
-Gates A1, A2a, A2b, A3, A5, A6, A7 pass. A4 ran and reports a null (D-11). A8: see TO_DO.md.
+Gates A1, A2a, A2b, A3, A5, A6, A7 and A8 pass; A8 by a clean-clone rerun whose tables are
+bit-identical to the local ones. A4 ran and reports a null (D-11).
 See [DECISIONS.md](DECISIONS.md) D-18 for the gates.
 
 ## Run it
